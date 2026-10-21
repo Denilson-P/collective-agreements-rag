@@ -222,3 +222,5 @@ data/documents/
 
 # Windows metadata
 desktop.ini
+# Local vector indexes
+data/vector_store/
