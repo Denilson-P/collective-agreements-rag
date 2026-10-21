@@ -1,11 +1,3 @@
-
-"""Semantic retrieval utilities for the collective agreements RAG system.
-
-This module retrieves relevant document chunks from an existing FAISS
-vector store. Retrieved documents retain their original metadata,
-allowing downstream components to identify and cite source agreements.
-"""
-
 from pathlib import Path
 
 from langchain_community.vectorstores import FAISS
