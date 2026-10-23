@@ -1,10 +1,10 @@
 # Collective Agreements RAG
 
-API desenvolvida com **FastAPI, LangChain, OpenAI e FAISS** para consultas inteligentes sobre Convenções Coletivas de Trabalho (CCTs).
+An API developed with **FastAPI, LangChain, OpenAI, and FAISS** for intelligent querying of Collective Labor Agreements (CLAs).
 
-O projeto utiliza **Retrieval-Augmented Generation (RAG)** para identificar obrigações e benefícios relacionados a seguros, retornando respostas fundamentadas em trechos dos documentos consultados.
+The project uses **Retrieval-Augmented Generation (RAG)** to identify insurance-related obligations and benefits, providing answers grounded in excerpts from the retrieved documents.
 
-## Tecnologias
+## Technologies
 
 - Python 3.12
 - FastAPI
@@ -15,63 +15,63 @@ O projeto utiliza **Retrieval-Augmented Generation (RAG)** para identificar obri
 - Pytest
 - Ruff
 
-## Pré-requisitos
+## Prerequisites
 
-- Python 3.12 ou superior
-- Chave de API da OpenAI com acesso aos modelos configurados
-- Documentos de Convenções Coletivas para indexação
+- Python 3.12 or higher
+- An OpenAI API key with access to the configured models
+- Collective Labor Agreement documents for indexing
 
-## Instalação
+## Installation
 
-Clone o repositório:
+Clone the repository:
 
 ```bash
 git clone https://github.com/Denilson-P/collective-agreements-rag.git
 cd collective-agreements-rag
 ```
 
-Crie e ative o ambiente virtual:
+Create and activate a virtual environment:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-Instale as dependências:
+Install the dependencies:
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-## Configuração
+## Configuration
 
-Crie o arquivo `.env` na raiz do projeto, utilizando o `.env.example` como referência:
+Create a `.env` file in the project root directory using `.env.example` as a reference:
 
 ```bash
 cp .env.example .env
 ```
 
-Configure sua chave da OpenAI:
+Configure your OpenAI API key:
 
 ```env
-OPENAI_API_KEY=sua_chave_aqui
+OPENAI_API_KEY=your_api_key_here
 EMBEDDING_MODEL=text-embedding-3-small
 CHAT_MODEL=gpt-5-mini
 ```
 
-O arquivo `.env` está protegido pelo `.gitignore` e não deve ser enviado ao repositório.
+The `.env` file is excluded from version control through `.gitignore` and should never be committed to the repository.
 
-## Indexação dos documentos
+## Document Indexing
 
-Adicione os documentos de Convenções Coletivas ao diretório:
+Place your Collective Labor Agreement documents in the following directory:
 
 ```text
 data/documents/
 ```
 
-A implementação atual suporta arquivos `.txt` e arquivos `.doc` cujo conteúdo esteja em formato HTML.
+The current implementation supports `.txt` files and HTML-based `.doc` files.
 
-Para gerar os embeddings e criar o índice FAISS, execute na raiz do projeto:
+To generate embeddings and create the FAISS vector index, run the following command from the project root directory:
 
 ```bash
 python - <<'PY'
@@ -84,74 +84,74 @@ chunks = split_documents(documents)
 vector_store = create_vector_store(chunks)
 save_vector_store(vector_store)
 
-print(f"Documentos processados: {len(documents)}")
-print(f"Chunks indexados: {len(chunks)}")
-print("Índice FAISS criado com sucesso.")
+print(f"Documents processed: {len(documents)}")
+print(f"Chunks indexed: {len(chunks)}")
+print("FAISS index created successfully.")
 PY
 ```
 
-O índice será armazenado em `data/vector_store/`.
+The generated index will be stored in `data/vector_store/`.
 
-**Observação:** a geração de embeddings utiliza a API da OpenAI e pode gerar custos. Após a indexação, o índice salvo poderá ser reutilizado nas consultas.
+**Note:** Embedding generation uses the OpenAI API and may incur usage costs. Once generated, the saved index can be reused for subsequent queries.
 
-## Executando a API
+## Running the API
 
-Inicie o servidor:
+Start the development server:
 
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
-A documentação interativa estará disponível em:
+The interactive API documentation will be available at:
 
 http://127.0.0.1:8000/docs
 
-### Endpoint de consulta
+### Chat Endpoint
 
 `POST /chat`
 
-Exemplo de requisição:
+Example request:
 
 ```json
 {
-  "question": "Esta convenção coletiva estabelece alguma obrigação relacionada a seguro de vida?",
+  "question": "Does this collective labor agreement establish any obligations related to life insurance?",
   "k": 4
 }
 ```
 
-A API retorna a pergunta, a resposta gerada e os trechos dos documentos recuperados como fontes.
+The API returns the original question, the generated answer, and the retrieved document excerpts as supporting sources.
 
-O parâmetro `k` é opcional e define a quantidade de trechos recuperados durante a busca semântica.
+The optional `k` parameter specifies the number of document chunks retrieved during semantic search.
 
-## Testes
+## Testing
 
-Para executar os testes automatizados:
+Run the automated tests:
 
 ```bash
 python -m pytest -q
 ```
 
-Para verificar a qualidade do código:
+Check code quality:
 
 ```bash
 ruff check .
 ```
 
-## Funcionamento
+## How It Works
 
-O processamento segue o fluxo:
+The RAG pipeline follows this workflow:
 
-**Documentos → Extração de texto → Chunking → OpenAI Embeddings → FAISS → Busca semântica → OpenAI → Resposta com fontes**
+**Documents → Text Extraction → Chunking → OpenAI Embeddings → FAISS → Semantic Search → OpenAI → Grounded Answer with Sources**
 
-Os embeddings são gerados com `text-embedding-3-small`, enquanto as respostas são produzidas com `gpt-5-mini`, utilizando os trechos recuperados do índice vetorial.
+Embeddings are generated using `text-embedding-3-small`, while responses are produced using `gpt-5-mini`, based on the relevant document excerpts retrieved from the vector index.
 
-## Observações
+## Additional Notes
 
-- O índice FAISS deve ser gerado antes de realizar consultas.
-- Os documentos e índices locais não são versionados.
-- A leitura de arquivos `.doc` binários tradicionais não está implementada nesta versão.
-- As respostas são geradas a partir dos documentos indexados e devem ser verificadas nas fontes apresentadas.
+- The FAISS index must be generated before submitting queries.
+- Local documents and generated vector indexes are excluded from version control.
+- Traditional binary `.doc` files are not supported in the current implementation.
+- Responses are generated based on indexed documents and should be verified against the provided source excerpts.
 
-## Licença
+## License
 
-Consulte o arquivo de licença do repositório, caso disponível.
+Refer to the repository's license file, if available.
