@@ -1,7 +1,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from app.services.chat_service import ChatService
+from app.routes.chat_router.service import ChatService
 
 
 def test_chat_service_executes_rag_pipeline() -> None:
@@ -26,7 +26,7 @@ def test_chat_service_executes_rag_pipeline() -> None:
     }
 
     with patch(
-        "app.services.chat_service.run_rag_pipeline",
+        "app.routes.chat_router.service.run_rag_pipeline",
         return_value=expected_response,
     ) as mocked_pipeline:
         service = ChatService(
@@ -55,7 +55,7 @@ def test_chat_service_forwards_retrieval_limit() -> None:
     vector_store = MagicMock()
 
     with patch(
-        "app.services.chat_service.run_rag_pipeline"
+        "app.routes.chat_router.service.run_rag_pipeline"
     ) as mocked_pipeline:
         service = ChatService(vector_store=vector_store)
 
@@ -79,10 +79,10 @@ def test_chat_service_loads_existing_vector_store() -> None:
 
     with (
         patch(
-            "app.services.chat_service.get_retriever",
+            "app.routes.chat_router.service.get_retriever",
             return_value=vector_store,
         ) as mocked_retriever,
-        patch("app.services.chat_service.run_rag_pipeline"),
+        patch("app.routes.chat_router.service.run_rag_pipeline"),
     ):
         service = ChatService()
 
