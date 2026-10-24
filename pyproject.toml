@@ -1,14 +1,15 @@
+
 [project]
 name = "collective-agreements-rag"
 version = "0.1.0"
 description = "RAG application for querying collective labor agreements"
 requires-python = ">=3.12"
-
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "pydantic-settings",
     "python-dotenv",
+    "python-multipart",
     "langchain",
     "langchain-community",
     "langchain-openai",
@@ -20,10 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest",
-    "ruff",
-]
+dev = ["pytest", "ruff"]
 
 [build-system]
 requires = ["setuptools>=68"]
