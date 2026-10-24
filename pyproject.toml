@@ -1,4 +1,3 @@
-
 [project]
 name = "collective-agreements-rag"
 version = "0.1.0"
@@ -16,6 +15,8 @@ dependencies = [
     "langchain-text-splitters",
     "faiss-cpu",
     "beautifulsoup4",
+    "pypdf",
+    "python-docx",
 ]
 
 [project.optional-dependencies]
