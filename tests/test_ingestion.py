@@ -1,14 +1,18 @@
+
 from pathlib import Path
 
+import pytest
 from docx import Document as WordDocument
 from langchain_core.documents import Document
 from pypdf import PdfWriter
+from pypdf.errors import PdfReadError
 
 from app.config import settings
 from app.rag.ingestion import (
     extract_docx_text,
     extract_html_text,
     extract_pdf_text,
+    load_document,
     load_documents,
     split_documents,
 )
@@ -176,3 +180,80 @@ def test_load_documents_ignores_empty_pdf(
     monkeypatch.setattr(settings, "documents_dir", tmp_path)
 
     assert load_documents() == []
+
+
+def test_load_document_txt_preserves_source(tmp_path: Path):
+    """Verify that an individual TXT file is loaded with source metadata."""
+    file_path = tmp_path / "agreement.txt"
+    file_path.write_text(
+        "O acordo prevê adicional noturno.",
+        encoding="utf-8",
+    )
+
+    document = load_document(file_path)
+
+    assert document is not None
+    assert document.page_content == "O acordo prevê adicional noturno."
+    assert document.metadata["source"] == "agreement.txt"
+
+
+def test_load_document_html_doc(tmp_path: Path):
+    """Verify that an HTML-based DOC is processed individually."""
+    file_path = tmp_path / "agreement.doc"
+    file_path.write_text(
+        "<html><body><p>Seguro de vida obrigatório.</p></body></html>",
+        encoding="utf-8",
+    )
+
+    document = load_document(file_path)
+
+    assert document is not None
+    assert "Seguro de vida obrigatório." in document.page_content
+    assert document.metadata["source"] == "agreement.doc"
+
+
+def test_load_document_docx(tmp_path: Path):
+    """Verify that an individual DOCX preserves its content and source."""
+    file_path = tmp_path / "agreement.docx"
+
+    word_document = WordDocument()
+    word_document.add_paragraph("Vale-alimentação previsto.")
+    word_document.save(file_path)
+
+    document = load_document(file_path)
+
+    assert document is not None
+    assert "Vale-alimentação previsto." in document.page_content
+    assert document.metadata["source"] == "agreement.docx"
+
+
+def test_load_document_rejects_empty_file(tmp_path: Path):
+    """Verify that empty supported documents return None."""
+    file_path = tmp_path / "empty.txt"
+    file_path.write_text("   \n   ", encoding="utf-8")
+
+    assert load_document(file_path) is None
+
+
+def test_load_document_ignores_unsupported_file(tmp_path: Path):
+    """Verify that unsupported extensions are ignored."""
+    file_path = tmp_path / "data.csv"
+    file_path.write_text("name,value", encoding="utf-8")
+
+    assert load_document(file_path) is None
+
+
+def test_load_document_handles_missing_file(tmp_path: Path):
+    """Verify that a nonexistent path returns None."""
+    file_path = tmp_path / "missing.pdf"
+
+    assert load_document(file_path) is None
+
+
+def test_load_document_propagates_invalid_pdf_error(tmp_path: Path):
+    """Verify that corrupted PDFs raise an extraction error."""
+    file_path = tmp_path / "invalid.pdf"
+    file_path.write_bytes(b"This is not a valid PDF.")
+
+    with pytest.raises(PdfReadError):
+        load_document(file_path)
