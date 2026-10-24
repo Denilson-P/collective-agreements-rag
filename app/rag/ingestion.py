@@ -1,3 +1,4 @@
+
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -63,8 +64,7 @@ def extract_pdf_text(file_path: Path) -> str:
     pages = [
         text.strip()
         for page in reader.pages
-        if (text := page.extract_text())
-        and text.strip()
+        if (text := page.extract_text()) and text.strip()
     ]
 
     return "\n\n".join(pages)
@@ -108,15 +108,69 @@ def extract_docx_text(file_path: Path) -> str:
     return "\n".join(lines)
 
 
+def load_document(file_path: Path) -> Document | None:
+    """Load and extract text from one supported document.
+
+    Processes TXT, HTML-based DOC, PDF, and DOCX files using the
+    existing extraction functions. Preserves the original filename
+    in the resulting document metadata.
+
+    Args:
+        file_path: Path to the document that should be processed.
+
+    Returns:
+        Document | None: Extracted LangChain document containing
+        text and source metadata, or None when the file is empty,
+        is not a regular file, or has an unsupported extension.
+
+    Raises:
+        OSError: If a supported file cannot be accessed.
+        Exception: If PDF or DOCX extraction fails.
+
+    Notes:
+        Legacy binary DOC files are not supported.
+        PDF files without extractable text return None.
+        File size and content validation will be handled by the
+        upload workflow in a later implementation.
+    """
+    if not file_path.is_file():
+        return None
+
+    extension = file_path.suffix.lower()
+
+    if extension == ".txt":
+        content = file_path.read_text(
+            encoding="utf-8",
+            errors="ignore",
+        )
+    elif extension == ".doc":
+        content = extract_html_text(file_path)
+    elif extension == ".pdf":
+        content = extract_pdf_text(file_path)
+    elif extension == ".docx":
+        content = extract_docx_text(file_path)
+    else:
+        return None
+
+    if not content.strip():
+        return None
+
+    return Document(
+        page_content=content,
+        metadata={"source": file_path.name},
+    )
+
+
 def load_documents() -> list[Document]:
     """Load supported documents from the configured directory.
 
-    Supports TXT, HTML-based DOC, PDF, and DOCX files. Empty
-    documents and unsupported extensions are ignored.
+    Iterates through the configured documents directory and delegates
+    individual file processing to load_document(). Empty documents
+    and unsupported extensions are ignored.
 
     Returns:
-        LangChain documents containing extracted text and the
-        original filename in source metadata.
+        list[Document]: Documents containing extracted text and
+        original source filenames.
 
     Raises:
         FileNotFoundError: If the documents directory does not exist.
@@ -124,42 +178,16 @@ def load_documents() -> list[Document]:
         Exception: If PDF or DOCX extraction fails.
 
     Notes:
-        Legacy binary DOC files are not supported. The existing DOC
-        extraction is intended for HTML-based documents.
+        The function preserves the existing directory-based ingestion
+        behavior while reusing the single-document extraction logic.
     """
     documents: list[Document] = []
 
     for file_path in sorted(settings.documents_dir.iterdir()):
-        if not file_path.is_file():
-            continue
+        document = load_document(file_path)
 
-        extension = file_path.suffix.lower()
-
-        if extension == ".txt":
-            content = file_path.read_text(
-                encoding="utf-8",
-                errors="ignore",
-            )
-        elif extension == ".doc":
-            content = extract_html_text(file_path)
-        elif extension == ".pdf":
-            content = extract_pdf_text(file_path)
-        elif extension == ".docx":
-            content = extract_docx_text(file_path)
-        else:
-            continue
-
-        if not content.strip():
-            continue
-
-        documents.append(
-            Document(
-                page_content=content,
-                metadata={
-                    "source": file_path.name,
-                },
-            )
-        )
+        if document is not None:
+            documents.append(document)
 
     return documents
 
@@ -173,7 +201,8 @@ def split_documents(
         documents: Extracted LangChain documents.
 
     Returns:
-        Document chunks containing the original source metadata.
+        list[Document]: Document chunks containing the original
+        source metadata.
 
     Notes:
         Chunk size and overlap are obtained from application settings.
