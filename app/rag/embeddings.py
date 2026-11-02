@@ -1,6 +1,3 @@
-
-"""Create, update, persist, and restore FAISS vector stores."""
-
 import logging
 import shutil
 from pathlib import Path
@@ -114,7 +111,7 @@ def load_vector_store(
         FAISS: Restored vector store ready for similarity searches.
 
     Raises:
-        FileNotFoundError: If the index directory does not exist.
+        FileNotFoundError: If the index files do not exist.
         ValueError: If embedding configuration is incomplete.
         Exception: If the stored index is invalid or incompatible.
 
@@ -122,9 +119,12 @@ def load_vector_store(
         FAISS metadata uses pickle deserialization. Only load index
         files generated and stored by this application.
     """
-    if not directory.is_dir():
+    index_file = directory / "index.faiss"
+    metadata_file = directory / "index.pkl"
+
+    if not index_file.is_file() or not metadata_file.is_file():
         raise FileNotFoundError(
-            f"Vector store directory not found: {directory}"
+            f"FAISS index files not found in: {directory}"
         )
 
     embedding_model = embeddings if embeddings is not None else get_embeddings()
@@ -143,8 +143,11 @@ def update_vector_store(
 ) -> FAISS:
     """Incrementally index documents and persist the updated FAISS store.
 
-    Creates an index when none exists, or adds new chunks to the
-    existing index. Saves to a staging directory before installation.
+    Creates a new index when the destination is absent or empty.
+    Updates the existing index when both FAISS files are present.
+    Rejects incomplete indexes to avoid accidental data loss.
+
+    Saves the updated index to a staging directory before installation.
 
     Args:
         documents: New document chunks to index.
@@ -156,6 +159,7 @@ def update_vector_store(
 
     Raises:
         ValueError: If the document list is empty.
+        RuntimeError: If an incomplete index is detected.
         OSError: If saving or installing the index fails.
         Exception: If loading, embedding generation, or indexing fails.
 
@@ -177,6 +181,29 @@ def update_vector_store(
         parent = directory.parent
         parent.mkdir(parents=True, exist_ok=True)
 
+        index_file = directory / "index.faiss"
+        metadata_file = directory / "index.pkl"
+
+        has_index = index_file.is_file()
+        has_metadata = metadata_file.is_file()
+
+        if has_index != has_metadata:
+            raise RuntimeError(
+                f"Incomplete FAISS index detected in: {directory}"
+            )
+
+        if directory.exists() and not directory.is_dir():
+            raise NotADirectoryError(
+                f"Vector store path is not a directory: {directory}"
+            )
+
+        if directory.is_dir() and not has_index:
+            if any(directory.iterdir()):
+                raise RuntimeError(
+                    f"Vector store directory contains unexpected files: "
+                    f"{directory}"
+                )
+
         staging_directory = parent / f".{directory.name}.staging-{uuid4().hex}"
         backup_directory = parent / f".{directory.name}.backup-{uuid4().hex}"
 
@@ -184,7 +211,7 @@ def update_vector_store(
         new_index_installed = False
 
         try:
-            if directory.exists():
+            if has_index and has_metadata:
                 vector_store = load_vector_store(
                     embeddings=embedding_model,
                     directory=directory,

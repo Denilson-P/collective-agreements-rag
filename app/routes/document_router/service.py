@@ -1,11 +1,9 @@
-
-"""Validate, store, and index uploaded collective agreement documents."""
-
 import re
 from pathlib import Path
 from threading import RLock
 from typing import BinaryIO
 
+from app.adapters.minio_storage import MinIOStorageAdapter
 from app.config import settings
 from app.rag.embeddings import update_vector_store
 from app.rag.ingestion import load_document, split_documents
@@ -22,54 +20,69 @@ class UploadTooLargeError(ValueError):
 
 
 class DocumentUploadService:
-    """Store validated documents and update the persisted FAISS index.
+    """Validate, persist, and index uploaded documents.
 
-    The service processes uploads sequentially within one application
-    process. Existing filenames are rejected to avoid accidentally
-    indexing the same stored document more than once.
+    Documents are initially stored on the local filesystem so the
+    existing ingestion pipeline can process them.
+
+    When object storage is configured, the original document is
+    also uploaded to MinIO before updating the FAISS index.
+
+    Upload operations are serialized within a single Python process.
+    Cross-process synchronization is not implemented.
     """
 
     def __init__(
         self,
         documents_dir: Path | None = None,
+        storage: MinIOStorageAdapter | None = None,
     ) -> None:
-        """Configure the directory used to store uploaded documents.
+        """Initialize the document upload service.
 
         Args:
-            documents_dir: Optional destination directory. Defaults
-                to the path configured in application settings.
+            documents_dir: Local directory used to store uploaded
+                documents. Defaults to the application configuration.
+            storage: Optional MinIO storage adapter. When omitted,
+                documents are processed using local storage only.
         """
         self.documents_dir = (
             documents_dir
             if documents_dir is not None
             else settings.documents_dir
         )
+        self.storage = storage
 
     def upload(
         self,
         filename: str,
         file: BinaryIO,
     ) -> dict[str, str | int]:
-        """Validate, persist, process, and index an uploaded document.
+        """Validate, store, process, and index a document.
 
         Args:
             filename: Original filename supplied by the client.
             file: Binary stream containing the uploaded document.
 
         Returns:
-            dict[str, str | int]: Filename, indexing status, and
-                number of chunks added to FAISS.
+            dict[str, str | int]: Original filename, indexing status,
+                and number of text chunks created.
 
         Raises:
-            ValueError: If the filename or document is invalid.
-            FileExistsError: If a document with that name exists.
+            ValueError: If the document is invalid or contains no
+                extractable text.
+            FileExistsError: If the filename already exists locally
+                or in the configured object storage.
             UploadTooLargeError: If the file exceeds 10 MB.
-            OSError: If storage or index persistence fails.
-            Exception: If extraction or embedding generation fails.
+            OSError: If local storage operations fail.
+            Exception: If MinIO, extraction, or indexing fails.
 
         Notes:
-            This implementation supports a single API process.
-            It does not implement cross-process file locking.
+            MinIO and FAISS do not support a shared transaction.
+            When indexing fails after object upload, the service
+            attempts to remove the newly uploaded object.
+
+            If compensating cleanup fails, manual reconciliation
+            may be necessary.
         """
         safe_filename = self._validate_filename(filename)
 
@@ -81,8 +94,18 @@ class DocumentUploadService:
 
             destination = self.documents_dir / safe_filename
 
+            if self.storage is not None:
+                self.storage.ensure_bucket_exists()
+
+                if self.storage.file_exists(safe_filename):
+                    raise FileExistsError(safe_filename)
+
+            local_file_created = False
+            object_uploaded = False
+
             try:
                 with destination.open("xb") as output:
+                    local_file_created = True
                     total_bytes = 0
 
                     while True:
@@ -117,6 +140,13 @@ class DocumentUploadService:
                         "Document did not produce any text chunks."
                     )
 
+                if self.storage is not None:
+                    self.storage.upload_file(
+                        file_path=destination,
+                        object_name=safe_filename,
+                    )
+                    object_uploaded = True
+
                 update_vector_store(documents=chunks)
 
                 return {
@@ -125,11 +155,18 @@ class DocumentUploadService:
                     "chunks_created": len(chunks),
                 }
 
-            except FileExistsError:
-                raise
-
             except Exception:
-                destination.unlink(missing_ok=True)
+                if object_uploaded and self.storage is not None:
+                    try:
+                        self.storage.delete_file(safe_filename)
+                    except Exception:
+                        # Preserve the original failure. A failed
+                        # compensation requires later reconciliation.
+                        pass
+
+                if local_file_created:
+                    destination.unlink(missing_ok=True)
+
                 raise
 
     @staticmethod
