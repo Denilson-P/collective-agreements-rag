@@ -1,7 +1,20 @@
+
 from functools import lru_cache
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AuthenticationError,
+    RateLimitError,
+)
+from qdrant_client.http.exceptions import (
+    ResponseHandlingException,
+    UnexpectedResponse,
+)
 
 from app.routes.chat_router.controller import ChatController
 from app.routes.chat_router.dto import ChatRequestDTO, ChatResponseDTO
@@ -14,23 +27,17 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 def get_chat_service() -> ChatService:
     """Provide a cached chat service instance for API requests.
 
-    Initializes the service on its first use and reuses the same
-    instance for subsequent requests within the application process.
+    Initializes the service with the configured Qdrant adapter on its
+    first use and reuses the same instance for subsequent requests.
 
     Returns:
-        ChatService: Service configured with the persisted FAISS index.
+        ChatService: Service configured for Qdrant document retrieval.
 
     Raises:
-        HTTPException: If the vector index is unavailable or the
-            embedding configuration is incomplete.
+        HTTPException: If the embedding configuration is incomplete.
     """
     try:
         return ChatService()
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Vector index is not available.",
-        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -66,8 +73,8 @@ def ask_question(
 ) -> ChatResponseDTO:
     """Answer questions using indexed collective agreement documents.
 
-    Receives a validated question, delegates execution to the
-    controller, and returns the generated answer with its sources.
+    Delegates validated requests to the chat controller and converts
+    known infrastructure failures into safe HTTP responses.
 
     Args:
         request (ChatRequestDTO): Validated question and retrieval limit.
@@ -77,16 +84,48 @@ def ask_question(
         ChatResponseDTO: Answer and supporting document excerpts.
 
     Raises:
-        HTTPException: If the service rejects the request or the
-            vector index is unavailable.
+        HTTPException: If validation fails, an external service is
+            unavailable, or a supported operation times out.
     """
     try:
         return controller.ask(request)
-    except FileNotFoundError as exc:
+
+    except (APITimeoutError, httpx.TimeoutException, TimeoutError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="An external service timed out.",
+        ) from exc
+
+    except (APIConnectionError, httpx.ConnectError) as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Vector index is not available.",
+            detail="AI service is temporarily unavailable.",
         ) from exc
+
+    except RateLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI service is temporarily unavailable.",
+        ) from exc
+
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI service configuration is unavailable.",
+        ) from exc
+
+    except APIStatusError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI service is temporarily unavailable.",
+        ) from exc
+
+    except (ResponseHandlingException, UnexpectedResponse) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Vector database is temporarily unavailable.",
+        ) from exc
+
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

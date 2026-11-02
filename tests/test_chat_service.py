@@ -1,16 +1,17 @@
 
 from unittest.mock import MagicMock, patch
 
+from app.adapters.qdrant_vector_store import QdrantVectorStoreAdapter
 from app.routes.chat_router.service import ChatService
 
 
 def test_chat_service_executes_rag_pipeline() -> None:
     """Verify that the chat service delegates questions to the RAG pipeline.
 
-    Ensures the service passes its configured dependencies and returns
-    the structured response produced by the pipeline.
+    Ensures the service passes its configured Qdrant vector store and
+    language model to the pipeline, returning its structured response.
     """
-    vector_store = MagicMock()
+    vector_store = MagicMock(spec=QdrantVectorStoreAdapter)
     chat_model = MagicMock()
 
     expected_response = {
@@ -47,12 +48,12 @@ def test_chat_service_executes_rag_pipeline() -> None:
 
 
 def test_chat_service_forwards_retrieval_limit() -> None:
-    """Verify that the service forwards the retrieval limit to the pipeline.
+    """Verify that the service forwards custom retrieval limits.
 
-    Confirms that a custom number of retrieved document chunks is
-    preserved when executing a question.
+    Confirms that the requested number of Qdrant document chunks is
+    passed unchanged to the RAG pipeline.
     """
-    vector_store = MagicMock()
+    vector_store = MagicMock(spec=QdrantVectorStoreAdapter)
 
     with patch(
         "app.routes.chat_router.service.run_rag_pipeline"
@@ -69,13 +70,13 @@ def test_chat_service_forwards_retrieval_limit() -> None:
     )
 
 
-def test_chat_service_loads_existing_vector_store() -> None:
-    """Verify that the persisted FAISS index is loaded during initialization.
+def test_chat_service_reuses_qdrant_vector_store() -> None:
+    """Verify that the Qdrant adapter is initialized only once.
 
-    Ensures the service initializes its vector store only once and
-    reuses the loaded instance for subsequent questions.
+    Ensures the service obtains its vector store through the retriever
+    dependency and reuses the same adapter for subsequent questions.
     """
-    vector_store = MagicMock()
+    vector_store = MagicMock(spec=QdrantVectorStoreAdapter)
 
     with (
         patch(

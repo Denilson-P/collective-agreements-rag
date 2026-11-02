@@ -1,12 +1,12 @@
 
 from typing import Any
 
-from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+from app.adapters.qdrant_vector_store import QdrantVectorStoreAdapter
 from app.config import settings
 from app.rag.retriever import retrieve_documents
 
@@ -38,7 +38,7 @@ def get_chat_model() -> BaseChatModel:
 
     Returns:
         BaseChatModel: Configured chat model ready to receive prompts
-        containing the user's question and retrieved document excerpts.
+            containing the user's question and retrieved document excerpts.
 
     Raises:
         ValueError: If the OpenAI API key is missing from the application
@@ -72,7 +72,7 @@ def build_context(documents: list[Document]) -> str:
 
     Returns:
         str: Formatted context containing numbered references, source
-        filenames, and the complete text of each retrieved chunk.
+            filenames, and the complete text of each retrieved chunk.
 
     Notes:
         Each chunk receives a distinct reference identifier, even when
@@ -112,9 +112,9 @@ def generate_answer(
 
     Returns:
         str: Generated answer in Brazilian Portuguese, potentially
-        containing numbered citations referring to the provided chunks.
-        If no documents are available, returns a predefined message
-        indicating insufficient context.
+            containing numbered citations referring to the provided chunks.
+            If no documents are available, returns a predefined message
+            indicating insufficient context.
 
     Raises:
         ValueError: If the question is empty or the default language model
@@ -155,14 +155,14 @@ def generate_answer(
 
 def run_rag_pipeline(
     question: str,
-    vector_store: FAISS,
+    vector_store: QdrantVectorStoreAdapter,
     chat_model: BaseChatModel | None = None,
     k: int | None = None,
 ) -> dict[str, Any]:
     """Execute the complete retrieval-augmented generation workflow.
 
     Validates the user's question, retrieves the most relevant document
-    chunks from FAISS, and generates an answer using only the retrieved
+    chunks from Qdrant, and generates an answer using only the retrieved
     excerpts as supporting context.
 
     The function returns both the generated answer and the retrieved
@@ -172,8 +172,8 @@ def run_rag_pipeline(
     Args:
         question (str): Natural-language question about collective
             agreement obligations, benefits, or requirements.
-        vector_store (FAISS): Initialized vector index containing the
-            processed collective agreement documents.
+        vector_store (QdrantVectorStoreAdapter): Configured Qdrant
+            adapter containing the indexed collective agreement chunks.
         chat_model (BaseChatModel | None): Optional language model for
             answer generation. Defaults to the configured OpenAI model.
         k (int | None): Maximum number of document chunks to retrieve.
