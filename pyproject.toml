@@ -18,6 +18,7 @@ dependencies = [
     "beautifulsoup4",
     "pypdf",
     "python-docx",
+    "minio>=7.2,<8"
 ]
 
 [project.optional-dependencies]
