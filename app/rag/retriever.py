@@ -1,86 +1,73 @@
-from pathlib import Path
 
-from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
-from langchain_core.embeddings import Embeddings
 
+from app.adapters.qdrant_vector_store import QdrantVectorStoreAdapter
 from app.config import settings
-from app.rag.embeddings import VECTOR_STORE_DIR, load_vector_store
+from app.dependencies.qdrant import get_qdrant_vector_store
 
 
-def get_retriever(
-    embeddings: Embeddings | None = None,
-    directory: Path = VECTOR_STORE_DIR,
-) -> FAISS:
-    """Load the vector store used for semantic document retrieval.
+def get_retriever() -> QdrantVectorStoreAdapter:
+    """Return the Qdrant vector store used for semantic document retrieval.
 
-    Restores an existing FAISS index from the local filesystem. The
-    resulting vector store can be reused across multiple queries without
-    rebuilding document embeddings.
+    Retrieves the shared Qdrant adapter configured for the application.
 
-    Args:
-        embeddings (Embeddings | None): Optional embedding implementation
-            used to encode search queries. It must be compatible with
-            the embeddings originally used to create the index.
-            When omitted, the configured OpenAI model is used.
-        directory (Path): Directory containing the persisted FAISS index.
-            Defaults to the application's vector store directory.
+    The returned adapter provides access to the configured Qdrant
+    collection, allowing indexed document chunks to be retrieved
+    across application requests.
 
     Returns:
-        FAISS: Loaded vector store ready to perform similarity searches.
+        QdrantVectorStoreAdapter: Configured adapter for performing
+            semantic similarity searches against Qdrant.
 
     Raises:
-        FileNotFoundError: If the vector store directory does not exist.
-        ValueError: If OpenAI embeddings are required but the API key
-            is not configured.
-        Exception: If the stored index cannot be loaded or deserialized.
+        ValueError: If the embedding configuration is incomplete.
+        Exception: If initialization of the Qdrant adapter fails.
 
     Notes:
-        This function delegates index loading to load_vector_store().
-        It does not regenerate document embeddings or create a new index.
-        Only trusted, locally generated FAISS indexes should be loaded.
+        The adapter is provided by a cached dependency, allowing the
+        application to reuse its Qdrant client and embedding model.
+        Collection creation and validation are handled by the adapter
+        when indexing or searching documents.
     """
-    return load_vector_store(
-        embeddings=embeddings,
-        directory=directory,
-    )
+    return get_qdrant_vector_store()
 
 
 def retrieve_documents(
     question: str,
-    vector_store: FAISS,
+    vector_store: QdrantVectorStoreAdapter,
     k: int | None = None,
 ) -> list[Document]:
-    """Retrieve document chunks most relevant to a natural-language question.
+    """Retrieve document chunks relevant to a natural-language question.
 
-    Converts the question into a vector using the embedding model associated
-    with the provided FAISS store, then performs a similarity search against
-    indexed collective agreement chunks.
+    Validates the question and retrieval limit before delegating the
+    semantic similarity search to the configured Qdrant adapter.
 
-    The returned documents preserve their page content and metadata,
-    including source filenames, for later use in grounded RAG responses.
+    Retrieved chunks retain their original content and metadata,
+    including source filenames, so the RAG pipeline can generate
+    grounded answers with document references.
 
     Args:
-        question (str): Natural-language question describing the information
-            to retrieve from the indexed collective agreements.
-        vector_store (FAISS): Initialized FAISS vector store containing
-            document chunks and their vector representations.
+        question (str): Natural-language question describing the
+            information to retrieve from collective agreements.
+        vector_store (QdrantVectorStoreAdapter): Configured Qdrant
+            adapter containing the indexed document chunks.
         k (int | None): Maximum number of relevant chunks to retrieve.
             When omitted, uses settings.retrieval_k.
 
     Returns:
-        list[Document]: Document chunks ranked by vector similarity,
-        containing their original text and source metadata. The result
-        may contain fewer than k documents if the index is smaller.
+        list[Document]: Relevant document chunks ranked by similarity.
+            The result may contain fewer than k documents when the
+            collection contains fewer matching chunks.
 
     Raises:
-        ValueError: If the question is empty or contains only whitespace,
-            or if the requested number of documents is less than one.
+        ValueError: If the question is empty or contains only
+            whitespace, or if the retrieval limit is less than one.
+        Exception: If the Qdrant similarity search fails.
 
     Notes:
-        Similarity search returns relevant context rather than a final
-        answer. Response generation and citation formatting belong to
-        the RAG pipeline implemented in a later development stage.
+        This function retrieves supporting context only. Answer
+        generation and source citation formatting remain the
+        responsibility of the RAG pipeline.
     """
     if not question.strip():
         raise ValueError("Question cannot be empty.")

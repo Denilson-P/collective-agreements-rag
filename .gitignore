@@ -224,3 +224,6 @@ data/documents/
 desktop.ini
 # Local vector indexes
 data/vector_store/
+
+# Local vector store backups
+data/backups/

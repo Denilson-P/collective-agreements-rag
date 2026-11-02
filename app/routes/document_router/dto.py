@@ -12,7 +12,7 @@ class DocumentUploadResponseDTO(BaseModel):
     Attributes:
         filename: Original filename stored by the application.
         status: Indexing status.
-        chunks_created: Number of chunks added to FAISS.
+        chunks_created: Number of chunks indexed in Qdrant.
     """
 
     filename: str = Field(min_length=1)

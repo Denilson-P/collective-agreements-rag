@@ -10,7 +10,7 @@ COPY app ./app
 
 RUN pip install --no-cache-dir .
 
-RUN mkdir -p /app/data/documents /app/data/vector_store
+RUN mkdir -p /app/data/documents
 
 EXPOSE 8000
 

@@ -1,11 +1,14 @@
+
+import logging
 import re
 from pathlib import Path
 from threading import RLock
 from typing import BinaryIO
+from uuid import uuid4
 
 from app.adapters.minio_storage import MinIOStorageAdapter
+from app.adapters.qdrant_vector_store import QdrantVectorStoreAdapter
 from app.config import settings
-from app.rag.embeddings import update_vector_store
 from app.rag.ingestion import load_document, split_documents
 
 ALLOWED_EXTENSIONS = frozenset({".txt", ".pdf", ".docx", ".doc"})
@@ -13,6 +16,7 @@ MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
 READ_CHUNK_SIZE = 1024 * 1024
 
 _UPLOAD_LOCK = RLock()
+logger = logging.getLogger(__name__)
 
 
 class UploadTooLargeError(ValueError):
@@ -26,7 +30,7 @@ class DocumentUploadService:
     existing ingestion pipeline can process them.
 
     When object storage is configured, the original document is
-    also uploaded to MinIO before updating the FAISS index.
+    uploaded to MinIO before indexing its text chunks in Qdrant.
 
     Upload operations are serialized within a single Python process.
     Cross-process synchronization is not implemented.
@@ -36,6 +40,7 @@ class DocumentUploadService:
         self,
         documents_dir: Path | None = None,
         storage: MinIOStorageAdapter | None = None,
+        vector_store: QdrantVectorStoreAdapter | None = None,
     ) -> None:
         """Initialize the document upload service.
 
@@ -44,6 +49,9 @@ class DocumentUploadService:
                 documents. Defaults to the application configuration.
             storage: Optional MinIO storage adapter. When omitted,
                 documents are processed using local storage only.
+            vector_store: Optional Qdrant adapter responsible for
+                indexing document chunks. Must be provided before
+                processing an upload.
         """
         self.documents_dir = (
             documents_dir
@@ -51,6 +59,7 @@ class DocumentUploadService:
             else settings.documents_dir
         )
         self.storage = storage
+        self.vector_store = vector_store
 
     def upload(
         self,
@@ -68,8 +77,8 @@ class DocumentUploadService:
                 and number of text chunks created.
 
         Raises:
-            ValueError: If the document is invalid or contains no
-                extractable text.
+            ValueError: If the document is invalid, contains no
+                extractable text, or Qdrant is not configured.
             FileExistsError: If the filename already exists locally
                 or in the configured object storage.
             UploadTooLargeError: If the file exceeds 10 MB.
@@ -77,14 +86,18 @@ class DocumentUploadService:
             Exception: If MinIO, extraction, or indexing fails.
 
         Notes:
-            MinIO and FAISS do not support a shared transaction.
-            When indexing fails after object upload, the service
-            attempts to remove the newly uploaded object.
+            MinIO and Qdrant do not support a shared transaction.
 
-            If compensating cleanup fails, manual reconciliation
-            may be necessary.
+            UUIDs are assigned before indexing so that a failed
+            operation can attempt to remove partially indexed vectors.
+
+            Compensation is best-effort. Cleanup failures are logged
+            without replacing the original exception.
         """
         safe_filename = self._validate_filename(filename)
+
+        if self.vector_store is None:
+            raise ValueError("Qdrant vector store is not configured.")
 
         with _UPLOAD_LOCK:
             self.documents_dir.mkdir(
@@ -102,6 +115,8 @@ class DocumentUploadService:
 
             local_file_created = False
             object_uploaded = False
+            indexing_started = False
+            vector_ids: list[str] = []
 
             try:
                 with destination.open("xb") as output:
@@ -140,6 +155,11 @@ class DocumentUploadService:
                         "Document did not produce any text chunks."
                     )
 
+                vector_ids = [
+                    str(uuid4())
+                    for _ in chunks
+                ]
+
                 if self.storage is not None:
                     self.storage.upload_file(
                         file_path=destination,
@@ -147,7 +167,12 @@ class DocumentUploadService:
                     )
                     object_uploaded = True
 
-                update_vector_store(documents=chunks)
+                indexing_started = True
+
+                self.vector_store.add_documents(
+                    documents=chunks,
+                    ids=vector_ids,
+                )
 
                 return {
                     "filename": safe_filename,
@@ -156,16 +181,37 @@ class DocumentUploadService:
                 }
 
             except Exception:
+                if indexing_started:
+                    try:
+                        self.vector_store.delete_documents(
+                            ids=vector_ids,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to compensate Qdrant vectors "
+                            "for document: %s",
+                            safe_filename,
+                        )
+
                 if object_uploaded and self.storage is not None:
                     try:
                         self.storage.delete_file(safe_filename)
                     except Exception:
-                        # Preserve the original failure. A failed
-                        # compensation requires later reconciliation.
-                        pass
+                        logger.exception(
+                            "Failed to compensate MinIO object "
+                            "for document: %s",
+                            safe_filename,
+                        )
 
                 if local_file_created:
-                    destination.unlink(missing_ok=True)
+                    try:
+                        destination.unlink(missing_ok=True)
+                    except OSError:
+                        logger.exception(
+                            "Failed to remove local document "
+                            "after upload failure: %s",
+                            destination,
+                        )
 
                 raise
 
