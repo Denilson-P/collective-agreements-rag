@@ -1,46 +1,29 @@
-
-"""Automated tests for document upload and indexing.
-
-Tests validate the upload API without calling OpenAI or modifying
-the application's real document directory and FAISS index.
-"""
-
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.adapters.minio_storage import MinIOStorageAdapter
 from app.main import app
-from app.routes.document_router.route import get_document_controller
 from app.routes.document_router.controller import DocumentUploadController
+from app.routes.document_router.route import (
+    get_document_controller,
+    get_minio_storage,
+)
 from app.routes.document_router.service import DocumentUploadService
 
 
 @pytest.fixture
 def upload_directory(tmp_path: Path) -> Path:
-    """Provide an isolated directory for uploaded documents.
-
-    Args:
-        tmp_path: Temporary directory managed by pytest.
-
-    Returns:
-        Path: Directory used exclusively by the current test.
-    """
+    """Provide an isolated directory for uploaded documents."""
     return tmp_path / "documents"
 
 
 @pytest.fixture
 def client(upload_directory: Path):
-    """Create an API client with isolated upload dependencies.
-
-    Args:
-        upload_directory: Temporary destination for test documents.
-
-    Yields:
-        TestClient: HTTP client configured for isolated uploads.
-    """
+    """Create an API client with isolated upload dependencies."""
     service = DocumentUploadService(
         documents_dir=upload_directory,
     )
@@ -49,10 +32,41 @@ def client(upload_directory: Path):
 
     app.dependency_overrides[get_document_controller] = lambda: controller
 
-    with TestClient(app) as test_client:
-        yield test_client
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
 
-    app.dependency_overrides.clear()
+
+@pytest.fixture
+def minio_storage() -> MagicMock:
+    """Provide a mocked MinIO adapter without network access."""
+    storage = MagicMock(spec=MinIOStorageAdapter)
+    storage.file_exists.return_value = False
+    return storage
+
+
+@pytest.fixture
+def minio_client(
+    upload_directory: Path,
+    minio_storage: MagicMock,
+):
+    """Create an API client with mocked MinIO storage."""
+    service = DocumentUploadService(
+        documents_dir=upload_directory,
+        storage=minio_storage,
+    )
+
+    controller = DocumentUploadController(service=service)
+
+    app.dependency_overrides[get_document_controller] = lambda: controller
+
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
 
 
 def send_document(
@@ -60,16 +74,7 @@ def send_document(
     filename: str,
     content: bytes,
 ):
-    """Send a document to the upload endpoint.
-
-    Args:
-        client: Configured FastAPI test client.
-        filename: Name of the document being uploaded.
-        content: Raw document content.
-
-    Returns:
-        Response: HTTP response returned by the upload API.
-    """
+    """Send a document to the upload endpoint."""
     return client.post(
         "/documents/upload",
         files={
@@ -232,3 +237,167 @@ def test_upload_removes_file_when_indexing_fails(
             )
 
     assert not (upload_directory / "falha.txt").exists()
+
+
+def test_upload_document_to_minio(
+    minio_client: TestClient,
+    minio_storage: MagicMock,
+    upload_directory: Path,
+) -> None:
+    """Verify successful MinIO upload followed by FAISS indexing."""
+    filename = "convencao_minio.txt"
+    destination = upload_directory / filename
+
+    with patch(
+        "app.routes.document_router.service.update_vector_store"
+    ) as update_mock:
+        response = send_document(
+            minio_client,
+            filename,
+            b"Convencao coletiva para teste de armazenamento.",
+        )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "filename": filename,
+        "status": "indexed",
+        "chunks_created": 1,
+    }
+
+    assert destination.exists()
+
+    minio_storage.ensure_bucket_exists.assert_called_once_with()
+    minio_storage.file_exists.assert_called_once_with(filename)
+
+    minio_storage.upload_file.assert_called_once_with(
+        file_path=destination,
+        object_name=filename,
+    )
+
+    minio_storage.delete_file.assert_not_called()
+    update_mock.assert_called_once()
+
+
+def test_upload_rejects_existing_minio_object(
+    minio_client: TestClient,
+    minio_storage: MagicMock,
+    upload_directory: Path,
+) -> None:
+    """Reject an existing MinIO object without modifying local files."""
+    filename = "duplicado_minio.txt"
+    minio_storage.file_exists.return_value = True
+
+    with patch(
+        "app.routes.document_router.service.update_vector_store"
+    ) as update_mock:
+        response = send_document(
+            minio_client,
+            filename,
+            b"Documento que nao deve ser armazenado.",
+        )
+
+    assert response.status_code == 409
+    assert not (upload_directory / filename).exists()
+
+    minio_storage.file_exists.assert_called_once_with(filename)
+    minio_storage.upload_file.assert_not_called()
+    minio_storage.delete_file.assert_not_called()
+    update_mock.assert_not_called()
+
+
+def test_upload_removes_local_file_when_minio_fails(
+    minio_client: TestClient,
+    minio_storage: MagicMock,
+    upload_directory: Path,
+) -> None:
+    """Remove the local document if MinIO upload fails."""
+    filename = "falha_minio.txt"
+
+    minio_storage.upload_file.side_effect = RuntimeError(
+        "Simulated MinIO upload failure"
+    )
+
+    with patch(
+        "app.routes.document_router.service.update_vector_store"
+    ) as update_mock:
+        with pytest.raises(
+            RuntimeError,
+            match="Simulated MinIO upload failure",
+        ):
+            send_document(
+                minio_client,
+                filename,
+                b"Documento valido para simular falha no MinIO.",
+            )
+
+    assert not (upload_directory / filename).exists()
+
+    minio_storage.upload_file.assert_called_once()
+    minio_storage.delete_file.assert_not_called()
+    update_mock.assert_not_called()
+
+
+def test_upload_removes_minio_object_when_indexing_fails(
+    minio_client: TestClient,
+    minio_storage: MagicMock,
+    upload_directory: Path,
+) -> None:
+    """Remove local and MinIO files when FAISS indexing fails."""
+    filename = "falha_indexacao_minio.txt"
+
+    with patch(
+        "app.routes.document_router.service.update_vector_store",
+        side_effect=RuntimeError("Simulated FAISS indexing failure"),
+    ):
+        with pytest.raises(
+            RuntimeError,
+            match="Simulated FAISS indexing failure",
+        ):
+            send_document(
+                minio_client,
+                filename,
+                b"Documento valido para simular falha na indexacao.",
+            )
+
+    assert not (upload_directory / filename).exists()
+
+    minio_storage.upload_file.assert_called_once()
+    minio_storage.delete_file.assert_called_once_with(filename)
+
+
+def test_upload_endpoint_injects_minio_storage(
+    upload_directory: Path,
+    minio_storage: MagicMock,
+) -> None:
+    """Verify the endpoint uses the MinIO adapter provided by FastAPI."""
+    app.dependency_overrides[get_minio_storage] = lambda: minio_storage
+
+    try:
+        with patch(
+            "app.routes.document_router.route.DocumentUploadService",
+            autospec=True,
+        ) as service_class:
+            service_class.return_value.upload.return_value = {
+                "filename": "injecao.txt",
+                "status": "indexed",
+                "chunks_created": 1,
+            }
+
+            with TestClient(app) as test_client:
+                response = send_document(
+                    test_client,
+                    "injecao.txt",
+                    b"Documento para testar a injecao.",
+                )
+
+            assert response.status_code == 201
+            assert response.json()["status"] == "indexed"
+
+            service_class.assert_called_once_with(
+                storage=minio_storage,
+            )
+
+            service_class.return_value.upload.assert_called_once()
+
+    finally:
+        app.dependency_overrides.clear()
