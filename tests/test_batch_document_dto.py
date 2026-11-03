@@ -1,6 +1,8 @@
+
 import pytest
 from pydantic import ValidationError
 
+from app.routes.document_router.constants import MAX_BATCH_FILES
 from app.routes.document_router.dto import (
     BatchDocumentResultDTO,
     BatchDocumentUploadResponseDTO,
@@ -114,21 +116,43 @@ def test_batch_response_rejects_incorrect_counts() -> None:
         )
 
 
-def test_batch_response_rejects_more_than_ten_documents() -> None:
-    """Reject a batch response containing more than ten documents."""
+def test_batch_response_rejects_more_than_maximum_documents() -> None:
+    """Reject batch responses exceeding the configured maximum."""
     results = [
         BatchDocumentResultDTO(
             filename=f"documento_{index}.txt",
             status="indexed",
             chunks_created=1,
         )
-        for index in range(11)
+        for index in range(MAX_BATCH_FILES + 1)
     ]
 
     with pytest.raises(ValidationError):
         BatchDocumentUploadResponseDTO(
-            total=11,
-            indexed=11,
+            total=MAX_BATCH_FILES + 1,
+            indexed=MAX_BATCH_FILES + 1,
             failed=0,
             results=results,
         )
+
+
+def test_batch_response_accepts_maximum_documents() -> None:
+    """Verify batch response validation accepts the maximum size."""
+    results = [
+        BatchDocumentResultDTO(
+            filename=f"documento_{index}.txt",
+            status="indexed",
+            chunks_created=1,
+        )
+        for index in range(MAX_BATCH_FILES)
+    ]
+
+    response = BatchDocumentUploadResponseDTO(
+        total=MAX_BATCH_FILES,
+        indexed=MAX_BATCH_FILES,
+        failed=0,
+        results=results,
+    )
+
+    assert response.total == MAX_BATCH_FILES
+    assert len(response.results) == MAX_BATCH_FILES

@@ -10,6 +10,7 @@ from app.adapters.qdrant_vector_store import QdrantVectorStoreAdapter
 from app.config import settings
 from app.dependencies.qdrant import get_qdrant_vector_store
 from app.routes.chat_router.route import get_chat_service
+from app.routes.document_router.constants import MAX_BATCH_FILES
 from app.routes.document_router.controller import DocumentUploadController
 from app.routes.document_router.dto import (
     BatchDocumentUploadResponseDTO,
@@ -21,8 +22,6 @@ from app.routes.document_router.service import (
 )
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
-
-MAX_BATCH_FILES = 10
 
 
 @lru_cache
@@ -149,7 +148,7 @@ def upload_documents_batch(
         list[UploadFile],
         File(
             description=(
-                "Documents to index. Send between 1 and 10 files "
+                f"Documents to index. Send between 1 and {MAX_BATCH_FILES} files "
                 "using the multipart field 'files'."
             ),
         ),
@@ -175,7 +174,7 @@ def upload_documents_batch(
             individual indexing results and failures.
 
     Raises:
-        HTTPException: If the batch is empty or exceeds ten files.
+        HTTPException: If the batch is empty or exceeds the configured limit.
         Exception: If an unexpected processing failure occurs.
     """
     if not 1 <= len(files) <= MAX_BATCH_FILES:

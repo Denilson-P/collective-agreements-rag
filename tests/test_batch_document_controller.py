@@ -4,6 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from app.routes.document_router.constants import MAX_BATCH_FILES
 from app.routes.document_router.controller import DocumentUploadController
 from app.routes.document_router.service import DocumentUploadService
 
@@ -122,13 +123,13 @@ def test_batch_upload_handles_duplicate_document(
     assert result.results[1].status == "indexed"
 
 
-@pytest.mark.parametrize("count", [0, 11])
+@pytest.mark.parametrize("count", [0, MAX_BATCH_FILES + 1])
 def test_batch_upload_rejects_invalid_batch_size(
     controller: DocumentUploadController,
     service: Mock,
     count: int,
 ) -> None:
-    """Verify that the batch accepts between one and ten documents."""
+    """Verify that batches outside the configured limit are rejected."""
     files = [
         (f"documento_{index}.txt", BytesIO(b"Document content"))
         for index in range(count)
@@ -136,11 +137,38 @@ def test_batch_upload_rejects_invalid_batch_size(
 
     with pytest.raises(
         ValueError,
-        match="between 1 and 10 documents",
+        match=f"between 1 and {MAX_BATCH_FILES} documents",
     ):
         controller.upload_batch(files=files)
 
     service.upload.assert_not_called()
+
+
+def test_batch_upload_accepts_maximum_batch_size(
+    controller: DocumentUploadController,
+    service: Mock,
+) -> None:
+    """Verify that the controller processes the maximum allowed batch."""
+    service.upload.side_effect = [
+        {
+            "filename": f"documento_{index}.txt",
+            "status": "indexed",
+            "chunks_created": 1,
+        }
+        for index in range(MAX_BATCH_FILES)
+    ]
+
+    files = [
+        (f"documento_{index}.txt", BytesIO(b"Document content"))
+        for index in range(MAX_BATCH_FILES)
+    ]
+
+    result = controller.upload_batch(files=files)
+
+    assert result.total == MAX_BATCH_FILES
+    assert result.indexed == MAX_BATCH_FILES
+    assert result.failed == 0
+    assert service.upload.call_count == MAX_BATCH_FILES
 
 
 def test_batch_upload_propagates_infrastructure_failure(

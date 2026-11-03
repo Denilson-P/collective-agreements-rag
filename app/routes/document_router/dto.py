@@ -1,6 +1,9 @@
+
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
+
+from app.routes.document_router.constants import MAX_BATCH_FILES
 
 
 class DocumentUploadResponseDTO(BaseModel):
@@ -67,10 +70,13 @@ class BatchDocumentUploadResponseDTO(BaseModel):
         results: Individual results in the original upload order.
     """
 
-    total: int = Field(ge=1, le=10)
+    total: int = Field(ge=1, le=MAX_BATCH_FILES)
     indexed: int = Field(ge=0)
     failed: int = Field(ge=0)
-    results: list[BatchDocumentResultDTO] = Field(min_length=1, max_length=10)
+    results: list[BatchDocumentResultDTO] = Field(
+        min_length=1,
+        max_length=MAX_BATCH_FILES,
+    )
 
     @model_validator(mode="after")
     def validate_counts(self) -> "BatchDocumentUploadResponseDTO":
