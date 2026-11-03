@@ -56,8 +56,8 @@ class DocumentUploadController:
         """Process multiple documents and collect individual results.
 
         Each document is processed independently using the existing
-        upload service. Expected validation and duplicate errors are
-        captured without interrupting the remaining documents.
+        upload service. Validation errors and duplicate filenames are
+        handled separately without interrupting remaining uploads.
 
         Args:
             files: List of filename and binary stream pairs.
@@ -92,7 +92,19 @@ class DocumentUploadController:
                     )
                 )
 
-            except (ValueError, FileExistsError) as exc:
+            except FileExistsError:
+                results.append(
+                    BatchDocumentResultDTO(
+                        filename=filename,
+                        status="failed",
+                        error=(
+                            "Este documento já foi enviado anteriormente "
+                            "e está disponível para consulta."
+                        ),
+                    )
+                )
+
+            except ValueError as exc:
                 results.append(
                     BatchDocumentResultDTO(
                         filename=filename,

@@ -99,7 +99,12 @@ def test_batch_upload_handles_duplicate_document(
     controller: DocumentUploadController,
     service: Mock,
 ) -> None:
-    """Verify that duplicate filenames are reported individually."""
+    """Verify friendly duplicate errors and continued batch processing.
+
+    A previously uploaded document must receive an informative message
+    without exposing its filename as the error description. The next
+    document must still be indexed successfully.
+    """
     service.upload.side_effect = [
         FileExistsError("duplicado.txt"),
         {
@@ -116,11 +121,28 @@ def test_batch_upload_handles_duplicate_document(
         ]
     )
 
+    assert result.total == 2
     assert result.indexed == 1
     assert result.failed == 1
-    assert result.results[0].filename == "duplicado.txt"
-    assert result.results[0].status == "failed"
-    assert result.results[1].status == "indexed"
+
+    duplicate_result = result.results[0]
+
+    assert duplicate_result.filename == "duplicado.txt"
+    assert duplicate_result.status == "failed"
+    assert duplicate_result.chunks_created is None
+    assert duplicate_result.error == (
+        "Este documento já foi enviado anteriormente "
+        "e está disponível para consulta."
+    )
+
+    successful_result = result.results[1]
+
+    assert successful_result.filename == "novo.txt"
+    assert successful_result.status == "indexed"
+    assert successful_result.chunks_created == 1
+    assert successful_result.error is None
+
+    assert service.upload.call_count == 2
 
 
 @pytest.mark.parametrize("count", [0, MAX_BATCH_FILES + 1])
