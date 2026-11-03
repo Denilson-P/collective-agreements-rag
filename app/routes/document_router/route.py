@@ -11,13 +11,18 @@ from app.config import settings
 from app.dependencies.qdrant import get_qdrant_vector_store
 from app.routes.chat_router.route import get_chat_service
 from app.routes.document_router.controller import DocumentUploadController
-from app.routes.document_router.dto import DocumentUploadResponseDTO
+from app.routes.document_router.dto import (
+    BatchDocumentUploadResponseDTO,
+    DocumentUploadResponseDTO,
+)
 from app.routes.document_router.service import (
     DocumentUploadService,
     UploadTooLargeError,
 )
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
+
+MAX_BATCH_FILES = 10
 
 
 @lru_cache
@@ -130,5 +135,66 @@ def upload_document(
     # Keep compatibility with the current cached ChatService.
     # This invalidation can be removed after chat migration to Qdrant.
     get_chat_service.cache_clear()
+
+    return result
+
+
+@router.post(
+    "/upload/batch",
+    response_model=BatchDocumentUploadResponseDTO,
+    status_code=status.HTTP_200_OK,
+)
+def upload_documents_batch(
+    files: Annotated[
+        list[UploadFile],
+        File(
+            description=(
+                "Documents to index. Send between 1 and 10 files "
+                "using the multipart field 'files'."
+            ),
+        ),
+    ],
+    controller: Annotated[
+        DocumentUploadController,
+        Depends(get_document_controller),
+    ],
+) -> BatchDocumentUploadResponseDTO:
+    """Upload and index multiple collective agreements independently.
+
+    Each file is processed using the existing document upload
+    controller. Expected validation errors are included in the
+    response without interrupting the remaining documents.
+
+    Args:
+        files: Uploaded documents provided through multipart/form-data.
+        controller: Injected controller responsible for processing
+            the batch upload.
+
+    Returns:
+        BatchDocumentUploadResponseDTO: Processing summary containing
+            individual indexing results and failures.
+
+    Raises:
+        HTTPException: If the batch is empty or exceeds ten files.
+        Exception: If an unexpected processing failure occurs.
+    """
+    if not 1 <= len(files) <= MAX_BATCH_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Batch upload requires between 1 and "
+                f"{MAX_BATCH_FILES} documents."
+            ),
+        )
+
+    batch_files = [
+        (file.filename or "", file.file)
+        for file in files
+    ]
+
+    result = controller.upload_batch(files=batch_files)
+
+    if result.indexed > 0:
+        get_chat_service.cache_clear()
 
     return result
