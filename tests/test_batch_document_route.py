@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from app.adapters.minio_storage import MinIOStorageAdapter
 from app.adapters.qdrant_vector_store import QdrantVectorStoreAdapter
 from app.main import app
+from app.routes.document_router.constants import MAX_BATCH_FILES
 from app.routes.document_router.controller import DocumentUploadController
 from app.routes.document_router.route import get_document_controller
 from app.routes.document_router.service import DocumentUploadService
@@ -211,7 +212,7 @@ def test_batch_upload_duplicate_filename(
     vector_store.add_documents.assert_called_once()
 
 
-def test_batch_upload_rejects_more_than_ten_files(
+def test_batch_upload_rejects_more_than_maximum_files(
     client: TestClient,
     vector_store: MagicMock,
     minio_storage: MagicMock,
@@ -219,16 +220,37 @@ def test_batch_upload_rejects_more_than_ten_files(
     """Reject batches larger than the configured limit."""
     documents = [
         (f"documento_{index}.txt", b"Documento valido.")
-        for index in range(11)
+        for index in range(MAX_BATCH_FILES + 1)
     ]
 
     response = send_batch(client, documents)
 
     assert response.status_code == 400
-    assert "between 1 and 10" in response.json()["detail"]
+    assert f"between 1 and {MAX_BATCH_FILES}" in response.json()["detail"]
 
     vector_store.add_documents.assert_not_called()
     minio_storage.upload_file.assert_not_called()
+
+
+def test_batch_upload_accepts_maximum_files(
+    client: TestClient,
+    vector_store: MagicMock,
+    minio_storage: MagicMock,
+) -> None:
+    """Verify that the endpoint accepts exactly the maximum batch size."""
+    documents = [
+        (f"documento_{index}.txt", b"Documento valido.")
+        for index in range(MAX_BATCH_FILES)
+    ]
+
+    response = send_batch(client, documents)
+
+    assert response.status_code == 200
+    assert response.json()["total"] == MAX_BATCH_FILES
+    assert response.json()["indexed"] == MAX_BATCH_FILES
+    assert response.json()["failed"] == 0
+    assert vector_store.add_documents.call_count == MAX_BATCH_FILES
+    assert minio_storage.upload_file.call_count == MAX_BATCH_FILES
 
 
 def test_batch_upload_all_documents_fail(

@@ -3,6 +3,7 @@
 
 from typing import BinaryIO
 
+from app.routes.document_router.constants import MAX_BATCH_FILES
 from app.routes.document_router.dto import (
     BatchDocumentResultDTO,
     BatchDocumentUploadResponseDTO,
@@ -66,12 +67,12 @@ class DocumentUploadController:
                 uploads, failures, and individual processing results.
 
         Raises:
-            ValueError: If the batch is empty or exceeds ten documents.
+            ValueError: If the batch is empty or exceeds the configured limit.
             Exception: If an unexpected infrastructure failure occurs.
         """
-        if not 1 <= len(files) <= 10:
+        if not 1 <= len(files) <= MAX_BATCH_FILES:
             raise ValueError(
-                "Batch upload requires between 1 and 10 documents."
+                f"Batch upload requires between 1 and {MAX_BATCH_FILES} documents."
             )
 
         results: list[BatchDocumentResultDTO] = []
