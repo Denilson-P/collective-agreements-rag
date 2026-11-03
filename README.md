@@ -1,8 +1,16 @@
 # Collective Agreements RAG
 
-An API developed with **FastAPI, LangChain, OpenAI, and FAISS** for intelligent querying of Collective Labor Agreements (CLAs).
+A Retrieval-Augmented Generation (RAG) API built with **FastAPI, LangChain, OpenAI, Qdrant, and MinIO** for intelligent querying of Collective Labor Agreements (CLAs).
 
-The project uses **Retrieval-Augmented Generation (RAG)** to identify insurance-related obligations and benefits, providing answers grounded in excerpts from the retrieved documents.
+The system processes collective agreement documents, generates vector embeddings, retrieves relevant excerpts, and produces AI-generated answers grounded in indexed content.
+
+## Overview
+
+Collective Agreements RAG is designed to simplify access to information contained in collective labor agreements.
+
+The platform supports natural-language questions about contractual obligations, employee benefits, insurance requirements, and other provisions documented in collective agreements.
+
+It combines document ingestion, vector search, and large language models to provide contextual answers supported by retrieved sources.
 
 ## Technologies
 
@@ -10,16 +18,55 @@ The project uses **Retrieval-Augmented Generation (RAG)** to identify insurance-
 - FastAPI
 - LangChain
 - OpenAI API
-- FAISS
+- Qdrant
+- MinIO
 - Pydantic
 - Pytest
 - Ruff
+- Docker
+
+## Features
+
+### Document Processing
+
+- Upload documents through REST endpoints
+- Support for TXT, PDF, DOCX, and DOC files
+- Text extraction and document chunking
+- OpenAI embedding generation
+- Vector indexing with Qdrant
+- Document storage integration with MinIO
+
+### Batch Document Upload
+
+- Upload up to 50 documents per request
+- Maximum file size of 10 MB per document
+- Independent processing of each document
+- Individual success and failure results
+- Batch processing summary
+- Duplicate filename detection
+- Validation error handling
+- Continued processing when individual documents fail validation
+
+### RAG Chat
+
+- Natural-language document queries
+- Semantic retrieval of relevant document excerpts
+- AI-generated responses using retrieved context
+- Supporting source information
+- Configurable retrieval count
 
 ## Prerequisites
 
+For local development:
+
 - Python 3.12 or higher
-- An OpenAI API key with access to the configured models
-- Collective Labor Agreement documents for indexing
+- An OpenAI API key
+- Running Qdrant and MinIO services
+
+For containerized execution:
+
+- Docker
+- Docker Compose
 
 ## Installation
 
@@ -33,66 +80,74 @@ cd collective-agreements-rag
 Create and activate a virtual environment:
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 ```
 
-Install the dependencies:
+Install the project dependencies:
 
 ```bash
-pip install -e ".[dev]"
+pip install -e .
 ```
 
 ## Configuration
 
-Create a `.env` file in the project root directory using `.env.example` as a reference:
+Create a `.env` file in the project root using `.env.example` as a reference:
 
 ```bash
 cp .env.example .env
 ```
 
-Configure your OpenAI API key:
+Configure the application settings:
 
 ```env
+# OpenAI
 OPENAI_API_KEY=your_api_key_here
 EMBEDDING_MODEL=text-embedding-3-small
 CHAT_MODEL=gpt-5-mini
+
+# RAG Pipeline
+CHUNK_SIZE=1200
+CHUNK_OVERLAP=200
+RETRIEVAL_K=4
+
+# MinIO
+MINIO_ENDPOINT=minio:9000
+MINIO_ACCESS_KEY=your_minio_access_key
+MINIO_SECRET_KEY=your_minio_secret_key
+MINIO_BUCKET=collective-agreements
+MINIO_SECURE=false
+
+# Qdrant
+QDRANT_HOST=qdrant
+QDRANT_PORT=6333
+QDRANT_COLLECTION=collective-agreements
 ```
 
-The `.env` file is excluded from version control through `.gitignore` and should never be committed to the repository.
+### Environment Variables
 
-## Document Indexing
+| Variable | Description |
+|---|---|
+| `OPENAI_API_KEY` | OpenAI API authentication key |
+| `EMBEDDING_MODEL` | Model used to generate document embeddings |
+| `CHAT_MODEL` | Language model used to generate answers |
+| `CHUNK_SIZE` | Maximum configured chunk size |
+| `CHUNK_OVERLAP` | Overlap between consecutive document chunks |
+| `RETRIEVAL_K` | Default number of retrieved document chunks |
+| `MINIO_ENDPOINT` | MinIO server endpoint |
+| `MINIO_ACCESS_KEY` | MinIO access key |
+| `MINIO_SECRET_KEY` | MinIO secret key |
+| `MINIO_BUCKET` | Bucket used for document storage |
+| `MINIO_SECURE` | Whether to use HTTPS for MinIO connections |
+| `QDRANT_HOST` | Qdrant server hostname |
+| `QDRANT_PORT` | Qdrant server port |
+| `QDRANT_COLLECTION` | Collection used to store document vectors |
 
-Place your Collective Labor Agreement documents in the following directory:
+The default hostnames `minio` and `qdrant` are intended for Docker Compose networking.
 
-```text
-data/documents/
-```
+When running the backend directly on the host machine, configure these endpoints according to your local environment.
 
-The current implementation supports `.txt` files and HTML-based `.doc` files.
-
-To generate embeddings and create the FAISS vector index, run the following command from the project root directory:
-
-```bash
-python - <<'PY'
-from app.rag.ingestion import load_documents, split_documents
-from app.rag.embeddings import create_vector_store, save_vector_store
-
-documents = load_documents()
-chunks = split_documents(documents)
-
-vector_store = create_vector_store(chunks)
-save_vector_store(vector_store)
-
-print(f"Documents processed: {len(documents)}")
-print(f"Chunks indexed: {len(chunks)}")
-print("FAISS index created successfully.")
-PY
-```
-
-The generated index will be stored in `data/vector_store/`.
-
-**Note:** Embedding generation uses the OpenAI API and may incur usage costs. Once generated, the saved index can be reused for subsequent queries.
+The `.env` file contains sensitive configuration and must never be committed to version control.
 
 ## Running the API
 
@@ -102,13 +157,17 @@ Start the development server:
 uvicorn app.main:app --reload --port 8000
 ```
 
-The interactive API documentation will be available at:
+The interactive API documentation is available at:
 
 http://127.0.0.1:8000/docs
 
-### Chat Endpoint
+## API Endpoints
+
+### Chat
 
 `POST /chat`
+
+Submit a natural-language question about indexed collective agreements.
 
 Example request:
 
@@ -119,16 +178,197 @@ Example request:
 }
 ```
 
-The API returns the original question, the generated answer, and the retrieved document excerpts as supporting sources.
+The API returns an AI-generated answer and supporting document excerpts.
 
-The optional `k` parameter specifies the number of document chunks retrieved during semantic search.
+The optional `k` parameter controls the number of document chunks retrieved during semantic search.
+
+### Single Document Upload
+
+`POST /documents/upload`
+
+Upload one document using multipart form data.
+
+Supported formats:
+
+- `.txt`
+- `.pdf`
+- `.docx`
+- `.doc`
+
+Maximum file size: **10 MB**.
+
+Example successful response:
+
+```json
+{
+  "filename": "collective_agreement.pdf",
+  "status": "indexed",
+  "chunks_created": 42
+}
+```
+
+The number of chunks depends on the document content and chunking configuration.
+
+### Batch Document Upload
+
+`POST /documents/upload/batch`
+
+Upload multiple documents using multipart form data.
+
+**Request field:** `files`
+
+**Batch limit:** 1–50 documents
+
+**File size limit:** 10 MB per document
+
+The backend processes documents individually and returns a consolidated result.
+
+Example response:
+
+```json
+{
+  "total": 3,
+  "indexed": 2,
+  "failed": 1,
+  "results": [
+    {
+      "filename": "agreement_01.pdf",
+      "status": "indexed",
+      "chunks_created": 42,
+      "error": null
+    },
+    {
+      "filename": "agreement_02.docx",
+      "status": "indexed",
+      "chunks_created": 28,
+      "error": null
+    },
+    {
+      "filename": "agreement_03.pdf",
+      "status": "failed",
+      "chunks_created": null,
+      "error": "Este documento já foi enviado anteriormente e está disponível para consulta."
+    }
+  ]
+}
+```
+
+The batch endpoint returns individual processing results, including errors for documents that could not be indexed.
+
+Expected validation failures and duplicate filenames do not interrupt the processing of subsequent documents.
+
+Unexpected infrastructure failures are propagated rather than silently converted into individual validation errors.
+
+## Duplicate Document Handling
+
+Documents are checked for existing filenames during upload.
+
+When a document with the same filename has already been stored, the upload is rejected to prevent duplicate indexing.
+
+For batch uploads, the API returns an informative message:
+
+> Este documento já foi enviado anteriormente e está disponível para consulta.
+
+The remaining documents in the batch continue processing.
+
+The current API contract represents duplicate documents with `status: "failed"`.
+
+## RAG Architecture
+
+The document ingestion and retrieval pipeline follows this workflow:
+
+```text
+Document Upload
+       |
+       v
+File Validation
+       |
+       v
+Document Storage (MinIO)
+       |
+       v
+Text Extraction
+       |
+       v
+Document Chunking
+       |
+       v
+OpenAI Embeddings
+       |
+       v
+Qdrant Vector Database
+       |
+       v
+Semantic Retrieval
+       |
+       v
+OpenAI Language Model
+       |
+       v
+Grounded Answer with Sources
+```
+
+MinIO provides object storage for uploaded documents, while Qdrant stores and searches vector representations of document content.
+
+OpenAI embeddings enable semantic retrieval, and the language model generates answers using the retrieved context.
+
+## Running with Docker
+
+The backend includes a Dockerfile and can be started through the separate infrastructure repository.
+
+The infrastructure uses Docker Compose to orchestrate:
+
+- FastAPI backend
+- Next.js frontend
+- Qdrant vector database
+- MinIO object storage
+
+From the infrastructure directory:
+
+```bash
+docker compose up -d --build
+```
+
+Check running services:
+
+```bash
+docker compose ps
+```
+
+View backend logs:
+
+```bash
+docker compose logs --tail=50 backend
+```
+
+The backend is exposed locally at:
+
+http://127.0.0.1:8000
+
+The API documentation is available at:
+
+http://127.0.0.1:8000/docs
+
+Qdrant and MinIO use persistent Docker volumes to preserve indexed data and stored documents across container restarts.
 
 ## Testing
 
-Run the automated tests:
+Install the development tools:
+
+```bash
+pip install pytest ruff
+```
+
+Run the complete automated test suite:
 
 ```bash
 python -m pytest -q
+```
+
+Run the batch upload controller tests:
+
+```bash
+python -m pytest -q tests/test_batch_document_controller.py
 ```
 
 Check code quality:
@@ -137,20 +377,33 @@ Check code quality:
 ruff check .
 ```
 
-## How It Works
+The automated tests cover document validation, upload processing, batch limits, duplicate handling, response contracts, and other backend functionality.
 
-The RAG pipeline follows this workflow:
+## Development Status
 
-**Documents → Text Extraction → Chunking → OpenAI Embeddings → FAISS → Semantic Search → OpenAI → Grounded Answer with Sources**
+The backend currently provides document upload, batch processing, vector indexing, and RAG-based querying.
 
-Embeddings are generated using `text-embedding-3-small`, while responses are produced using `gpt-5-mini`, based on the relevant document excerpts retrieved from the vector index.
+The batch upload implementation supports up to 50 documents and includes individual error handling and regression tests for duplicate filenames.
+
+The project remains under active development.
+
+Future improvements may include:
+
+- Asynchronous batch processing
+- Expanded document management
+- Document deletion and reindexing
+- Additional integration testing
+- Improved error classification
+- Performance optimizations for large document batches
 
 ## Additional Notes
 
-- The FAISS index must be generated before submitting queries.
-- Local documents and generated vector indexes are excluded from version control.
-- Traditional binary `.doc` files are not supported in the current implementation.
-- Responses are generated based on indexed documents and should be verified against the provided source excerpts.
+- Embedding generation and language model requests use the OpenAI API and may incur usage costs.
+- Uploaded documents are not automatically overwritten when filenames already exist.
+- Batch processing currently occurs within the HTTP request.
+- Large batches may require additional timeout configuration or asynchronous processing.
+- Uploaded documents and persistent storage data should not be committed to version control.
+- AI-generated answers should be verified against the provided document sources.
 
 ## License
 
