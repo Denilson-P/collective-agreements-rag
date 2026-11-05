@@ -225,3 +225,44 @@ def test_get_retriever_uses_shared_qdrant_adapter(
     )
 
     assert results[0].metadata["source"] == "convencao_2025.doc"
+
+
+def test_identifies_broad_questions() -> None:
+    """Verify that cross-document questions activate broad retrieval."""
+    from app.rag.retriever import is_broad_question
+
+    assert is_broad_question("Quais convenções exigem seguro de vida?")
+    assert is_broad_question("Analise todas as convenções coletivas.")
+    assert not is_broad_question("O que diz a cláusula de seguro?")
+
+
+def test_broad_retrieval_covers_multiple_sources(
+    vector_store: QdrantVectorStoreAdapter,
+) -> None:
+    """Verify that broad retrieval considers every indexed source."""
+    results = retrieve_documents(
+        question="Quais convenções estabelecem obrigações?",
+        vector_store=vector_store,
+    )
+
+    sources = {document.metadata["source"] for document in results}
+
+    assert sources == {
+        "convencao_2024.doc",
+        "convencao_2025.doc",
+        "convencao_2026.doc",
+    }
+
+
+def test_broad_retrieval_respects_explicit_limit(
+    vector_store: QdrantVectorStoreAdapter,
+) -> None:
+    """Verify that broad retrieval respects the requested chunk limit."""
+    results = retrieve_documents(
+        question="Quais convenções estabelecem obrigações?",
+        vector_store=vector_store,
+        k=2,
+    )
+
+    assert len(results) == 2
+    assert len({doc.metadata["source"] for doc in results}) == 2
