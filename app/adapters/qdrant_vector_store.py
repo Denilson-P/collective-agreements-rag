@@ -10,9 +10,13 @@ from qdrant_client import QdrantClient, models
 class QdrantVectorStoreAdapter:
     """Manage document indexing and semantic retrieval using Qdrant.
 
-    Encapsulates Qdrant collection management and LangChain vector
-    operations, keeping vector database concerns separate from the
-    application's RAG business logic.
+    Encapsulates Qdrant collection management, LangChain vector
+    operations, source discovery, and document-filtered retrieval.
+
+    Supports searching with precomputed embeddings to avoid generating
+    the same query embedding repeatedly during broad retrieval.
+
+    Keeps vector database concerns separate from RAG business logic.
     """
 
     def __init__(
@@ -89,7 +93,7 @@ class QdrantVectorStoreAdapter:
 
         Returns:
             QdrantVectorStore: Vector store bound to the existing
-            Qdrant collection and embedding implementation.
+                Qdrant collection and embedding implementation.
         """
         return QdrantVectorStore(
             client=self.client,
@@ -186,23 +190,137 @@ class QdrantVectorStoreAdapter:
             wait=True,
         )
 
+    def list_sources(self) -> list[str]:
+        """List distinct source filenames indexed in the collection.
+
+        Scans Qdrant point payloads using pagination without loading
+        embedding vectors. Extracts the original source filename from
+        LangChain's nested metadata payload.
+
+        Returns:
+            list[str]: Sorted unique source filenames. Returns an empty
+                list when the collection does not exist or contains no
+                documents with valid source metadata.
+
+        Raises:
+            Exception: If a Qdrant collection inspection or scroll
+                operation fails.
+
+        Notes:
+            The source field is stored at metadata.source in Qdrant.
+            Pagination ensures all indexed documents can be discovered.
+        """
+        if not self.client.collection_exists(self.collection_name):
+            return []
+
+        sources: set[str] = set()
+        offset = None
+
+        while True:
+            points, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=256,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+
+            for point in points:
+                payload = point.payload or {}
+                metadata = payload.get("metadata", {})
+
+                if not isinstance(metadata, dict):
+                    continue
+
+                source = metadata.get("source")
+
+                if isinstance(source, str) and source.strip():
+                    sources.add(source.strip())
+
+            if offset is None:
+                break
+
+        return sorted(sources)
+
+    def embed_query(self, query: str) -> list[float]:
+        """Generate a reusable embedding for a search query.
+
+        Args:
+            query: Natural-language question to embed.
+
+        Returns:
+            list[float]: Dense vector representing the question.
+
+        Raises:
+            ValueError: If the query is empty or contains only spaces.
+            Exception: If the embedding provider fails.
+        """
+        if not query.strip():
+            raise ValueError("Search query cannot be empty.")
+
+        return self.embeddings.embed_query(query.strip())
+
+    @staticmethod
+    def _build_source_filter(
+        source: str | None,
+    ) -> models.Filter | None:
+        """Build an optional exact-match filter for source metadata.
+
+        Args:
+            source: Filename of the document to restrict retrieval to.
+
+        Returns:
+            models.Filter | None: Qdrant filter when a source is supplied,
+                otherwise None.
+
+        Raises:
+            ValueError: If a supplied source is blank.
+        """
+        if source is None:
+            return None
+
+        if not source.strip():
+            raise ValueError("Source filename cannot be empty.")
+
+        return models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="metadata.source",
+                    match=models.MatchValue(
+                        value=source.strip(),
+                    ),
+                )
+            ]
+        )
+
     def similarity_search(
         self,
         query: str,
         k: int = 4,
+        source: str | None = None,
     ) -> list[Document]:
         """Retrieve document chunks ranked by semantic similarity.
+
+        Supports both global semantic retrieval and retrieval restricted
+        to a specific indexed collective agreement.
 
         Args:
             query: Natural-language search query.
             k: Maximum number of document chunks to retrieve.
+            source: Optional exact source filename.
 
         Returns:
             list[Document]: Relevant document chunks and metadata.
 
         Raises:
-            ValueError: If the query is blank or retrieval limit is invalid.
+            ValueError: If the query is blank, retrieval limit is
+                invalid, or the supplied source is blank.
             Exception: If the Qdrant collection or search fails.
+
+        Notes:
+            The source filter uses metadata.source, matching the
+            payload structure generated by LangChain's Qdrant adapter.
+            Global searches retain their original call signature.
         """
         if not query.strip():
             raise ValueError("Search query cannot be empty.")
@@ -210,9 +328,74 @@ class QdrantVectorStoreAdapter:
         if k < 1:
             raise ValueError("Retrieval limit must be greater than zero.")
 
+        source_filter = self._build_source_filter(source)
+
         self.ensure_collection_exists()
 
+        search_kwargs = {
+            "query": query.strip(),
+            "k": k,
+        }
+
+        if source_filter is not None:
+            search_kwargs["filter"] = source_filter
+
         return self._get_vector_store().similarity_search(
-            query=query.strip(),
-            k=k,
+            **search_kwargs,
+        )
+
+    def similarity_search_by_vector(
+        self,
+        embedding: list[float],
+        k: int = 4,
+        source: str | None = None,
+    ) -> list[Document]:
+        """Retrieve relevant chunks using an existing query embedding.
+
+        Reuses a previously generated embedding instead of invoking the
+        embedding provider for every document-specific search.
+
+        Args:
+            embedding: Dense vector generated from the search question.
+            k: Maximum number of document chunks to retrieve.
+            source: Optional exact source filename.
+
+        Returns:
+            list[Document]: Relevant document chunks and metadata.
+
+        Raises:
+            ValueError: If the embedding is empty, has incompatible
+                dimensions, the retrieval limit is invalid, or the
+                supplied source is blank.
+            Exception: If the Qdrant collection or search fails.
+
+        Notes:
+            Uses LangChain's vector search to preserve the existing
+            document content and metadata mapping.
+        """
+        if not embedding:
+            raise ValueError("Search embedding cannot be empty.")
+
+        if len(embedding) != self.vector_size:
+            raise ValueError(
+                "Search embedding has incompatible dimensions."
+            )
+
+        if k < 1:
+            raise ValueError("Retrieval limit must be greater than zero.")
+
+        source_filter = self._build_source_filter(source)
+
+        self.ensure_collection_exists()
+
+        search_kwargs = {
+            "embedding": embedding,
+            "k": k,
+        }
+
+        if source_filter is not None:
+            search_kwargs["filter"] = source_filter
+
+        return self._get_vector_store().similarity_search_by_vector(
+            **search_kwargs,
         )
