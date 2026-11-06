@@ -31,7 +31,9 @@ def vector_store() -> MagicMock:
     Returns:
         MagicMock: Isolated vector indexing and deletion operations.
     """
-    return MagicMock(spec=QdrantVectorStoreAdapter)
+    store = MagicMock(spec=QdrantVectorStoreAdapter)
+    store.has_content_hash.return_value = False
+    return store
 
 
 @pytest.fixture
@@ -477,3 +479,87 @@ def test_upload_does_not_delete_vectors_if_minio_upload_fails(
     vector_store.add_documents.assert_not_called()
     vector_store.delete_documents.assert_not_called()
     assert not (upload_directory / "minio_indisponivel.txt").exists()
+
+
+def test_upload_rejects_same_text_under_different_name(
+    client: TestClient,
+    upload_directory: Path,
+    vector_store: MagicMock,
+) -> None:
+    """Reject duplicate text even when the uploaded filename changes."""
+    first = send_document(client, "original.txt", b"Acordo com beneficio de saude.")
+    second = send_document(client, "renomeado.txt", b"Acordo com beneficio de saude.")
+
+    assert first.status_code == 201
+    assert second.status_code == 409
+    assert not (upload_directory / "renomeado.txt").exists()
+    assert vector_store.add_documents.call_count == 1
+
+
+def test_upload_rejects_normalized_duplicate_text(
+    client: TestClient,
+    vector_store: MagicMock,
+) -> None:
+    """Ignore whitespace differences when matching document contents."""
+    first = send_document(client, "primeiro.txt", b"Beneficio  de   saude.")
+    second = send_document(client, "segundo.txt", b"Beneficio de\nsaude.")
+
+    assert first.status_code == 201
+    assert second.status_code == 409
+    vector_store.add_documents.assert_called_once()
+
+
+def test_upload_accepts_distinct_content_and_stable_chunk_metadata(
+    client: TestClient,
+    vector_store: MagicMock,
+) -> None:
+    """Index different text and attach document identity to every chunk."""
+    first = send_document(client, "um.txt", b"Texto do primeiro acordo.")
+    second = send_document(client, "dois.txt", b"Texto do segundo acordo.")
+
+    assert first.status_code == second.status_code == 201
+    assert vector_store.add_documents.call_count == 2
+    first_doc = vector_store.add_documents.call_args_list[0].kwargs["documents"][0]
+    second_doc = vector_store.add_documents.call_args_list[1].kwargs["documents"][0]
+    assert first_doc.metadata["content_hash"] != second_doc.metadata["content_hash"]
+    assert first_doc.metadata["document_id"] != second_doc.metadata["document_id"]
+    UUID(first_doc.metadata["document_id"])
+    UUID(second_doc.metadata["document_id"])
+
+
+def test_upload_rejects_hash_already_present_in_qdrant(
+    client: TestClient,
+    upload_directory: Path,
+    vector_store: MagicMock,
+) -> None:
+    """Reject a remotely indexed duplicate before embeddings are generated."""
+    vector_store.has_content_hash.return_value = True
+    response = send_document(client, "outro_nome.txt", b"Texto ja indexado.")
+
+    assert response.status_code == 409
+    assert not (upload_directory / "outro_nome.txt").exists()
+    vector_store.add_documents.assert_not_called()
+    vector_store.has_content_hash.assert_called_once()
+
+
+def test_upload_batch_rejects_duplicate_content_without_stopping(
+    client: TestClient,
+    vector_store: MagicMock,
+) -> None:
+    """Report a duplicated batch item while processing the next document."""
+    response = client.post(
+        "/documents/upload/batch",
+        files=[
+            ("files", ("primeiro.txt", BytesIO(b"Acordo inicial."), "text/plain")),
+            ("files", ("copia.txt", BytesIO(b"Acordo inicial."), "text/plain")),
+            ("files", ("diferente.txt", BytesIO(b"Outro acordo."), "text/plain")),
+        ],
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["indexed"] == 2
+    assert payload["failed"] == 1
+    assert [item["status"] for item in payload["results"]] == [
+        "indexed", "failed", "indexed"
+    ]
+    assert vector_store.add_documents.call_count == 2

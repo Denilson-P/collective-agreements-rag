@@ -1,6 +1,8 @@
 
+import hashlib
 import logging
 import re
+import unicodedata
 from pathlib import Path
 from threading import RLock
 from typing import BinaryIO
@@ -79,8 +81,8 @@ class DocumentUploadService:
         Raises:
             ValueError: If the document is invalid, contains no
                 extractable text, or Qdrant is not configured.
-            FileExistsError: If the filename already exists locally
-                or in the configured object storage.
+            FileExistsError: If the filename already exists locally,
+                in object storage, or its text duplicates another document.
             UploadTooLargeError: If the file exceeds 10 MB.
             OSError: If local storage operations fail.
             Exception: If MinIO, extraction, or indexing fails.
@@ -148,6 +150,33 @@ class DocumentUploadService:
                         "Document does not contain extractable text."
                     )
 
+                content_hash = self._content_hash(document.page_content)
+
+                if self.vector_store.has_content_hash(content_hash):
+                    raise FileExistsError(
+                        "A document with identical text is already indexed."
+                    )
+
+                # Older uploads predate content_hash metadata. Check originals
+                # still present locally without modifying their Qdrant points.
+                for existing in self.documents_dir.iterdir():
+                    if existing == destination or not existing.is_file():
+                        continue
+                    if existing.suffix.lower() not in ALLOWED_EXTENSIONS:
+                        continue
+                    previous = load_document(existing)
+                    if previous is not None and self._content_hash(
+                        previous.page_content
+                    ) == content_hash:
+                        raise FileExistsError(
+                            "A document with identical text already exists."
+                        )
+
+                document.metadata.update(
+                    document_id=str(uuid4()),
+                    content_hash=content_hash,
+                )
+
                 chunks = split_documents([document])
 
                 if not chunks:
@@ -214,6 +243,19 @@ class DocumentUploadService:
                         )
 
                 raise
+
+    @staticmethod
+    def _content_hash(content: str) -> str:
+        """Hash extracted text after Unicode and whitespace normalization.
+
+        Args:
+            content: Text extracted from a supported document.
+
+        Returns:
+            str: SHA-256 hexadecimal digest of normalized text.
+        """
+        normalized = " ".join(unicodedata.normalize("NFC", content).split())
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _validate_filename(filename: str) -> str:

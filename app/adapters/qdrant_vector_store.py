@@ -1,4 +1,5 @@
 
+import re
 from uuid import UUID
 
 from langchain_core.documents import Document
@@ -189,6 +190,43 @@ class QdrantVectorStoreAdapter:
             ),
             wait=True,
         )
+
+    def has_content_hash(self, content_hash: str) -> bool:
+        """Check whether an indexed document already has this text hash.
+
+        Args:
+            content_hash: SHA-256 digest of normalized extracted text.
+
+        Returns:
+            bool: True if an indexed point carries the matching hash.
+
+        Raises:
+            ValueError: If the supplied digest is not a SHA-256 hex string.
+            Exception: If Qdrant cannot complete the lookup.
+        """
+        if not isinstance(content_hash, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", content_hash
+        ):
+            raise ValueError("Content hash must be a SHA-256 hex digest.")
+
+        if not self.client.collection_exists(self.collection_name):
+            return False
+
+        points, _ = self.client.scroll(
+            collection_name=self.collection_name,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="metadata.content_hash",
+                        match=models.MatchValue(value=content_hash),
+                    )
+                ]
+            ),
+            limit=1,
+            with_payload=False,
+            with_vectors=False,
+        )
+        return bool(points)
 
     def list_sources(self) -> list[str]:
         """List distinct source filenames indexed in the collection.
