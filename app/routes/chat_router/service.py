@@ -1,4 +1,3 @@
-
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -6,6 +5,7 @@ from langchain_core.language_models import BaseChatModel
 from app.adapters.qdrant_vector_store import QdrantVectorStoreAdapter
 from app.rag.pipeline import run_rag_pipeline
 from app.rag.retriever import get_retriever
+from app.routes.chat_router.intent_router import get_direct_answer
 
 
 class ChatService:
@@ -60,6 +60,16 @@ class ChatService:
             ValueError: If the question or retrieval limit is invalid.
             Exception: If retrieval or answer generation fails.
         """
+        # Respond to explicit conversational intents without retrieval or LLM calls.
+        # Ambiguous messages continue through the existing RAG pipeline.
+        direct_answer = get_direct_answer(question)
+        if direct_answer is not None:
+            return {
+                "question": question,
+                "answer": direct_answer,
+                "sources": [],
+            }
+
         return run_rag_pipeline(
             question=question,
             vector_store=self.vector_store,
