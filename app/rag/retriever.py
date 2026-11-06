@@ -1,4 +1,3 @@
-
 """Adaptive semantic retrieval for Brazilian collective agreements."""
 
 import re
@@ -239,6 +238,7 @@ def retrieve_documents(
     question: str,
     vector_store: QdrantVectorStoreAdapter,
     k: int | None = None,
+    allowed_sources: list[str] | None = None,
 ) -> list[Document]:
     """Retrieve relevant chunks using an adaptive search strategy.
 
@@ -252,6 +252,8 @@ def retrieve_documents(
     Args:
         question: Natural-language question about collective agreements.
         vector_store: Configured Qdrant vector store adapter.
+        allowed_sources: Optional names of documents eligible for retrieval.
+            An empty list disables retrieval rather than searching globally.
         k: Optional retrieval limit. For specific questions, overrides
             the default global limit. For broad questions, limits the
             total number of returned chunks when explicitly provided.
@@ -285,7 +287,10 @@ def retrieve_documents(
 
     normalized_question = question.strip()
 
-    if not is_broad_question(normalized_question):
+    if allowed_sources is not None and not allowed_sources:
+        return []
+
+    if allowed_sources is None and not is_broad_question(normalized_question):
         retrieval_limit = (
             k if k is not None else settings.retrieval_k
         )
@@ -295,7 +300,11 @@ def retrieve_documents(
             k=retrieval_limit,
         )
 
-    sources = vector_store.list_sources()
+    sources = (
+        list(dict.fromkeys(allowed_sources))
+        if allowed_sources is not None
+        else vector_store.list_sources()
+    )
 
     max_chunks = (
         min(k, MAX_BROAD_CHUNKS)

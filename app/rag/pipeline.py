@@ -1,4 +1,3 @@
-
 import logging
 import re
 from time import perf_counter
@@ -273,6 +272,7 @@ def run_rag_pipeline(
     vector_store: QdrantVectorStoreAdapter,
     chat_model: BaseChatModel | None = None,
     k: int | None = None,
+    allowed_sources: list[str] | None = None,
 ) -> dict[str, Any]:
     """Execute adaptive retrieval and evidence-grounded analysis.
 
@@ -281,6 +281,7 @@ def run_rag_pipeline(
         vector_store: Configured Qdrant vector store adapter.
         chat_model: Optional injected language model.
         k: Optional retrieval limit passed to the retriever.
+        allowed_sources: Optional source whitelist for contextual follow-ups.
 
     Returns:
         dict[str, Any]: Result containing the normalized question,
@@ -313,6 +314,7 @@ def run_rag_pipeline(
         question=normalized_question,
         vector_store=vector_store,
         k=k,
+        **({"allowed_sources": allowed_sources} if allowed_sources is not None else {}),
     )
 
     retrieval_duration = (
@@ -327,7 +329,7 @@ def run_rag_pipeline(
 
     generation_started_at = perf_counter()
 
-    if is_broad_question(normalized_question) and documents:
+    if (allowed_sources is not None or is_broad_question(normalized_question)) and documents:
         model = (
             chat_model
             if chat_model is not None
@@ -340,9 +342,19 @@ def run_rag_pipeline(
             chat_model=model,
         )
 
+        # A document must contain evidence about the new subject, not merely
+        # the subject mentioned in a previous question. For funeral questions,
+        # require funeral-related wording in the returned evidence itself.
+        funeral_query = re.search(r"\bfuner(?:al|ari[ao])\b", normalized_question, re.I)
+        consolidation_kwargs = {}
+        if allowed_sources is not None and funeral_query:
+            consolidation_kwargs["required_evidence_pattern"] = re.compile(
+                r"\bfuner(?:al|ari[ao])\b", re.I
+            )
         result = consolidate_analyses(
             question=normalized_question,
             analyses=analyses,
+            **consolidation_kwargs,
         )
 
         answer = result["answer"]

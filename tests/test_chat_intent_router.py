@@ -1,4 +1,5 @@
 from unittest.mock import Mock, patch
+from uuid import UUID
 
 import pytest
 
@@ -33,6 +34,7 @@ def test_direct_conversation_does_not_call_pipeline(message: str) -> None:
     assert isinstance(response["answer"], str)
     assert response["answer"]
     assert response["sources"] == []
+    UUID(response["conversation_id"])
     pipeline.assert_not_called()
     store.similarity_search.assert_not_called()
 
@@ -64,7 +66,8 @@ def test_document_or_ambiguous_question_keeps_rag(message: str) -> None:
         return_value=expected,
     ) as pipeline:
         response = ChatService(vector_store=store, chat_model=model).ask(message, k=3)
-    assert response == expected
+    assert {key: response[key] for key in expected} == expected
+    UUID(response["conversation_id"])
     pipeline.assert_called_once_with(
         question=message,
         vector_store=store,

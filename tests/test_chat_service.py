@@ -1,5 +1,5 @@
-
 from unittest.mock import MagicMock, patch
+from uuid import UUID
 
 from app.adapters.qdrant_vector_store import QdrantVectorStoreAdapter
 from app.routes.chat_router.service import ChatService
@@ -37,7 +37,8 @@ def test_chat_service_executes_rag_pipeline() -> None:
 
         result = service.ask("O seguro de vida é obrigatório?")
 
-    assert result == expected_response
+    assert {key: result[key] for key in expected_response} == expected_response
+    UUID(result["conversation_id"])
 
     mocked_pipeline.assert_called_once_with(
         question="O seguro de vida é obrigatório?",
