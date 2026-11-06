@@ -1,4 +1,3 @@
-
 """Integration tests for the multipart batch document upload endpoint."""
 
 from io import BytesIO
@@ -37,7 +36,9 @@ def vector_store() -> MagicMock:
     Returns:
         MagicMock: Vector store without external network access.
     """
-    return MagicMock(spec=QdrantVectorStoreAdapter)
+    store = MagicMock(spec=QdrantVectorStoreAdapter)
+    store.has_content_hash.return_value = False
+    return store
 
 
 @pytest.fixture
@@ -212,6 +213,34 @@ def test_batch_upload_duplicate_filename(
     vector_store.add_documents.assert_called_once()
 
 
+
+def test_batch_upload_duplicate_content_with_different_filenames(
+    client: TestClient,
+    upload_directory: Path,
+    vector_store: MagicMock,
+    minio_storage: MagicMock,
+) -> None:
+    """Reject duplicate text despite different filenames in one batch."""
+    response = send_batch(
+        client,
+        [
+            ("convencao_original.txt", b"Mesmo conteudo da convencao."),
+            ("convencao_renomeada.txt", b"Mesmo   conteudo da convencao."),
+        ],
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert data["indexed"] == 1
+    assert data["failed"] == 1
+    assert data["results"][0]["status"] == "indexed"
+    assert data["results"][1]["status"] == "failed"
+    assert (upload_directory / "convencao_original.txt").exists()
+    assert not (upload_directory / "convencao_renomeada.txt").exists()
+    vector_store.add_documents.assert_called_once()
+    minio_storage.upload_file.assert_called_once()
+
 def test_batch_upload_rejects_more_than_maximum_files(
     client: TestClient,
     vector_store: MagicMock,
@@ -239,7 +268,7 @@ def test_batch_upload_accepts_maximum_files(
 ) -> None:
     """Verify that the endpoint accepts exactly the maximum batch size."""
     documents = [
-        (f"documento_{index}.txt", b"Documento valido.")
+        (f"documento_{index}.txt", f"Documento valido {index}.".encode())
         for index in range(MAX_BATCH_FILES)
     ]
 

@@ -404,3 +404,46 @@ def test_propagates_deletion_failure(
 
     with pytest.raises(RuntimeError, match="Qdrant deletion failure"):
         storage.delete_documents([str(uuid4())])
+
+
+def test_has_content_hash_when_collection_missing(
+    storage: QdrantVectorStoreAdapter,
+    qdrant_client: Mock,
+) -> None:
+    """Return False without scanning when the Qdrant collection is absent."""
+    qdrant_client.collection_exists.return_value = False
+    assert storage.has_content_hash("a" * 64) is False
+    qdrant_client.scroll.assert_not_called()
+
+
+def test_has_content_hash_uses_payload_filter(
+    storage: QdrantVectorStoreAdapter,
+    qdrant_client: Mock,
+) -> None:
+    """Use metadata.content_hash to detect an indexed document."""
+    digest = "b" * 64
+    qdrant_client.collection_exists.return_value = True
+    qdrant_client.scroll.return_value = ([Mock()], None)
+    assert storage.has_content_hash(digest) is True
+    qdrant_client.scroll.assert_called_once_with(
+        collection_name="collective-agreements",
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="metadata.content_hash",
+                    match=models.MatchValue(value=digest),
+                )
+            ]
+        ),
+        limit=1,
+        with_payload=False,
+        with_vectors=False,
+    )
+
+
+def test_has_content_hash_rejects_invalid_digest(
+    storage: QdrantVectorStoreAdapter,
+) -> None:
+    """Reject malformed digests rather than sending invalid filters."""
+    with pytest.raises(ValueError, match="SHA-256"):
+        storage.has_content_hash("invalid")
