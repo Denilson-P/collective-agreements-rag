@@ -1,5 +1,5 @@
-
 import unicodedata
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -23,6 +23,10 @@ class ChatRequestDTO(BaseModel):
         description="Question about the indexed collective agreements.",
         examples=["O seguro de vida é obrigatório?"],
     )
+    conversation_id: str | None = Field(
+        default=None,
+        description="UUID returned by an earlier chat response to continue that session.",
+    )
     k: int | None = Field(
         default=None,
         ge=1,
@@ -30,6 +34,24 @@ class ChatRequestDTO(BaseModel):
         description="Optional number of document chunks to retrieve.",
         examples=[4],
     )
+
+    @field_validator("conversation_id")
+    @classmethod
+    def validate_conversation_id(cls, value: str | None) -> str | None:
+        """Validate an optional UUID that identifies a conversation session.
+
+        Args:
+            value: Client-supplied UUID or None for a new conversation.
+
+        Returns:
+            Canonical UUID or None.
+
+        Raises:
+            ValueError: When a supplied identifier is not a UUID.
+        """
+        if value is None:
+            return None
+        return str(UUID(value))
 
     @field_validator("question")
     @classmethod
@@ -97,3 +119,5 @@ class ChatResponseDTO(BaseModel):
     question: str
     answer: str
     sources: list[ChatSourceDTO]
+    conversation_id: str | None = None
+

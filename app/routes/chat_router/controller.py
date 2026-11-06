@@ -3,44 +3,27 @@ from app.routes.chat_router.service import ChatService
 
 
 class ChatController:
-    """Coordinate chat requests between the API and RAG service.
-
-    Receives validated request data, delegates answer generation to
-    the chat service, and converts the result into the response DTO.
-
-    Attributes:
-        service (ChatService): Service responsible for executing
-            retrieval-augmented generation queries.
-    """
+    """Coordinate chat requests between the API and the chat service."""
 
     def __init__(self, service: ChatService) -> None:
-        """Initialize the controller with an injected chat service.
+        """Initialize the controller with an injected service.
 
         Args:
-            service (ChatService): Service responsible for processing
-                questions using the existing RAG pipeline.
+            service: Chat service responsible for generating answers.
         """
         self.service = service
 
     def ask(self, request: ChatRequestDTO) -> ChatResponseDTO:
-        """Process a validated question and return a structured response.
+        """Process a validated chat message and preserve its session identity.
 
         Args:
-            request (ChatRequestDTO): Validated request containing the
-                user's question and optional retrieval limit.
+            request: User's question, retrieval limit, and optional session UUID.
 
         Returns:
-            ChatResponseDTO: Generated answer with supporting document
-            excerpts and numbered source references.
-
-        Raises:
-            ValueError: If the service rejects the question or retrieval
-                parameters.
-            Exception: If semantic retrieval or answer generation fails.
+            Validated answer with document sources and session UUID.
         """
-        result = self.service.ask(
-            question=request.question,
-            k=request.k,
-        )
-
+        kwargs = {'question': request.question, 'k': request.k}
+        if request.conversation_id is not None:
+            kwargs['conversation_id'] = request.conversation_id
+        result = self.service.ask(**kwargs)
         return ChatResponseDTO.model_validate(result)

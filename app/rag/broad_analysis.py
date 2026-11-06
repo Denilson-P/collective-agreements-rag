@@ -1,4 +1,3 @@
-
 import logging
 import re
 import unicodedata
@@ -287,12 +286,15 @@ def analyze_agreements(
 def consolidate_analyses(
     question: str,
     analyses: list[DocumentAnalysis],
+    required_evidence_pattern: re.Pattern[str] | None = None,
 ) -> dict[str, Any]:
     """Build a response from validated document analyses.
 
     Args:
         question: Original user question.
         analyses: Independently validated document analyses.
+        required_evidence_pattern: Optional condition that supporting evidence
+            must satisfy for a contextual follow-up.
 
     Returns:
         dict[str, Any]: Response containing question, answer
@@ -336,8 +338,21 @@ def consolidate_analyses(
 
         reference = len(sources) + 1
 
-        evidence = select_representative_evidence(
-            analysis
+        matching_evidence = (
+            [item for item in analysis.evidence
+             if required_evidence_pattern.search(item.excerpt)]
+            if required_evidence_pattern is not None
+            else analysis.evidence
+        )
+        if not matching_evidence:
+            continue
+
+        # Preserve the existing obligation-aware evidence ranking, but only
+        # among excerpts that actually mention the follow-up subject.
+        evidence = (
+            max(matching_evidence, key=score_mandatory_evidence)
+            if analysis.classification == EvidenceClassification.MANDATORY
+            else matching_evidence[0]
         )
 
         sources.append(
