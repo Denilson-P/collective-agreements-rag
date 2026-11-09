@@ -1,4 +1,3 @@
-
 """Unit tests for independent collective agreement analysis."""
 
 from unittest.mock import MagicMock
@@ -343,31 +342,37 @@ def test_analyze_document_rejects_missing_documents(
         )
 
 
-def test_analyze_document_rejects_wrong_source(
+def test_analyze_document_preserves_trusted_source(
     sample_documents: list[Document],
     mock_chat_model: MagicMock,
 ) -> None:
-    """Verify that the model cannot substitute another source."""
-    expected = create_analysis(
+    """Use the requested source when model output names another document.
+
+    The model's source field is untrusted. Retrieval metadata defines the
+    source identity, and the model's result must not be mutated in place.
+    """
+    model_analysis = create_analysis(
         source="outra_convencao.doc",
         classification=EvidenceClassification.MANDATORY,
         excerpt="A empresa manterá seguro de vida em grupo.",
     )
 
     mock_chat_model.with_structured_output.return_value.invoke.return_value = (
-        expected
+        model_analysis
     )
 
-    with pytest.raises(
-        ValueError,
-        match="The analyzed source does not match",
-    ):
-        analyze_document(
-            question="O seguro é obrigatório?",
-            source="convencao_a.doc",
-            documents=sample_documents[:2],
-            chat_model=mock_chat_model,
-        )
+    result = analyze_document(
+        question="O seguro é obrigatório?",
+        source="convencao_a.doc",
+        documents=sample_documents[:2],
+        chat_model=mock_chat_model,
+    )
+
+    assert result.source == "convencao_a.doc"
+    assert result.classification == EvidenceClassification.MANDATORY
+    assert result.evidence == model_analysis.evidence
+    assert model_analysis.source == "outra_convencao.doc"
+    assert result is not model_analysis
 
 
 def test_analyze_document_rejects_missing_model_result(
