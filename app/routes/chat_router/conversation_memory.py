@@ -23,6 +23,7 @@ class Conversation:
 
     name: str | None = None
     turns: list[ConversationTurn] = field(default_factory=list)
+    total_turns: int = 0
 
 
 class ConversationMemory:
@@ -56,7 +57,11 @@ class ConversationMemory:
             self._sessions.move_to_end(key)
             while len(self._sessions) > self.max_sessions:
                 self._sessions.popitem(last=False)
-            return key, Conversation(name=session.name, turns=list(session.turns))
+            return key, Conversation(
+                name=session.name,
+                turns=list(session.turns),
+                total_turns=session.total_turns,
+            )
 
     def save(
         self,
@@ -98,6 +103,7 @@ class ConversationMemory:
                 documentary=documentary,
                 sources=source_names,
             ))
+            session.total_turns += 1
             del session.turns[:-self.max_turns]
             self._sessions.move_to_end(conversation_id)
             while len(self._sessions) > self.max_sessions:

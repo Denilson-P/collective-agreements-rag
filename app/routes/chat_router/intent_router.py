@@ -100,3 +100,43 @@ def get_direct_answer(message: str) -> str | None:
     if any(pattern.fullmatch(normalized) for pattern in _CLEAR_OFF_TOPIC_PATTERNS):
         return _OFF_TOPIC_ANSWER
     return None
+
+
+_HISTORY_INTENT_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "first_message": (
+        re.compile(r"^qual foi (?:a )?(?:minha )?primeira mensagem(?: que (?:eu )?enviei)?$"),
+        re.compile(r"^o que (?:eu )?(?:disse|escrevi|enviei) (?:primeiro|no inicio da conversa)$"),
+        re.compile(r"^como (?:eu )?comecei (?:esta|essa|a) conversa$"),
+    ),
+    "last_message": (
+        re.compile(r"^qual foi (?:a )?minha ultima mensagem(?: (?:que )?(?:eu )?enviei)?$"),
+        re.compile(r"^o que (?:eu )?(?:disse|falei|escrevi|enviei) (?:anteriormente|antes|por ultimo)$"),
+        re.compile(r"^voce lembra (?:o que )?(?:eu )?(?:disse|falei) (?:antes|anteriormente)$"),
+    ),
+    "last_question": (
+        re.compile(r"^qual foi (?:a )?minha ultima pergunta(?: (?:que )?(?:eu )?fiz)?$"),
+        re.compile(r"^o que (?:eu )?perguntei (?:antes|anteriormente|por ultimo)$"),
+        re.compile(r"^qual (?:foi|era) (?:a )?pergunta anterior$"),
+    ),
+}
+
+
+def get_history_intent(message: str) -> str | None:
+    """Identify explicit requests to recall the user's own chat history.
+
+    Args:
+        message: Original user message, with optional accents or punctuation.
+
+    Returns:
+        str | None: One of first_message, last_message, last_question, or
+        None when the request should follow normal conversational/RAG routing.
+
+    Notes:
+        Anchored patterns avoid suppressing documentary questions mentioning
+        historical messages or agreements. No external services are called.
+    """
+    normalized = _normalize_intent_text(message)
+    for intent, patterns in _HISTORY_INTENT_PATTERNS.items():
+        if any(pattern.fullmatch(normalized) for pattern in patterns):
+            return intent
+    return None
