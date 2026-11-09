@@ -9,7 +9,7 @@ from app.rag.pipeline import run_rag_pipeline
 from app.rag.ingestion import extract_cnpjs
 from app.rag.retriever import get_retriever
 from app.routes.chat_router.conversation_memory import conversation_memory
-from app.routes.chat_router.intent_router import get_direct_answer
+from app.routes.chat_router.intent_router import get_direct_answer, get_history_intent
 
 
 _CNPJ_CANDIDATE_PATTERN = re.compile(
@@ -86,7 +86,13 @@ class ChatService:
         )
         normalized = ' '.join(re.sub(r'[^\w\s]', ' ', normalized).split())
 
-        if _is_name_question(normalized):
+        history_intent = get_history_intent(question)
+
+        if history_intent is not None:
+            answer = self._answer_history_question(history_intent, snapshot)
+            result = {"question": question, "answer": answer, "sources": []}
+            documentary = False
+        elif _is_name_question(normalized):
             answer = (
                 f'Seu nome é {snapshot.name}.' if snapshot.name
                 else 'Você ainda não informou seu nome nesta conversa.'
@@ -146,6 +152,50 @@ class ChatService:
 
         conversation_memory.save(session_id, question, result['answer'], documentary, sources=result.get('sources', []))
         return {**result, 'conversation_id': session_id}
+
+    @staticmethod
+    def _answer_history_question(intent: str, snapshot: Any) -> str:
+        """Answer explicit history questions using only saved user messages.
+
+        Args:
+            intent: Recognized history request (first/last message or question).
+            snapshot: Bounded conversation snapshot before the current message.
+
+        Returns:
+            str: Recalled message or an honest notice when history is missing
+            or too old to be retained in process-local memory.
+        """
+        if not snapshot.turns:
+            return "Você ainda não enviou mensagens anteriores nesta conversa."
+
+        if intent == "first_message":
+            if snapshot.total_turns > len(snapshot.turns):
+                return (
+                    "Não consigo recuperar sua primeira mensagem: ela já saiu "
+                    "do histórico temporário desta conversa."
+                )
+            return f'Sua primeira mensagem nesta conversa foi: "{snapshot.turns[0].question}".'
+
+        if intent == "last_message":
+            return f'Sua mensagem anterior foi: "{snapshot.turns[-1].question}".'
+
+        # All user messages are stored as requests, but a greeting is not
+        # necessarily a question. Prefer an explicit question when available.
+        prior_question = next(
+            (turn.question for turn in reversed(snapshot.turns)
+             if "?" in turn.question or re.match(
+                 r"^(?:qual|quais|quem|como|quando|onde|por que|porque|o que|e quais|e qual)\b",
+                 " ".join(re.sub(r"[^\w\s]", " ", unicodedata.normalize(
+                     "NFKD", turn.question.casefold()
+                 )).split()),
+             )),
+            None,
+        )
+        if prior_question is None:
+            if snapshot.total_turns > len(snapshot.turns):
+                return "Não encontrei uma pergunta no histórico recente disponível."
+            return "Você ainda não fez uma pergunta anterior nesta conversa."
+        return f'Sua última pergunta anterior foi: "{prior_question}".'
 
     def _answer_documentary_question(
         self,
