@@ -1,4 +1,4 @@
-
+import re
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -8,6 +8,78 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 
 from app.config import settings
+
+
+_CNPJ_PATTERN = re.compile(
+    r"(?<![\dA-Za-z])"
+    r"(?:\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{14})"
+    r"(?![\dA-Za-z])"
+)
+
+
+def _is_valid_cnpj(cnpj: str) -> bool:
+    """Validate the check digits of a numeric Brazilian CNPJ.
+
+    Args:
+        cnpj: Fourteen numeric characters, with no punctuation.
+
+    Returns:
+        bool: Whether the CNPJ has valid digits and check digits.
+    """
+    if len(cnpj) != 14 or not cnpj.isascii() or not cnpj.isdigit():
+        return False
+
+    if len(set(cnpj)) == 1:
+        return False
+
+    digits = [int(digit) for digit in cnpj]
+    first_weights = (5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)
+    second_weights = (6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2)
+
+    def check_digit(weights: tuple[int, ...]) -> int:
+        """Compute the check digit for the supplied positional weights.
+
+        Args:
+            weights: Weights for the CNPJ prefix.
+
+        Returns:
+            int: Expected check digit.
+        """
+        remainder = sum(
+            digit * weight for digit, weight in zip(digits, weights)
+        ) % 11
+        return 0 if remainder < 2 else 11 - remainder
+
+    return (
+        digits[12] == check_digit(first_weights)
+        and digits[13] == check_digit(second_weights)
+    )
+
+
+def extract_cnpjs(text: str) -> list[str]:
+    """Extract distinct, valid numeric CNPJs from document text.
+
+    Args:
+        text: Extracted document content, potentially containing CNPJs.
+
+    Returns:
+        list[str]: Valid CNPJs as 14 digits in first-appearance order.
+            An empty list is returned when none can be identified.
+
+    Notes:
+        This identifies numbers, not the entities to which they belong.
+        Alphanumeric CNPJs and documents requiring OCR are not supported.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+
+    for match in _CNPJ_PATTERN.finditer(text):
+        digits = re.sub(r"\D", "", match.group())
+        if digits not in seen and _is_valid_cnpj(digits):
+            seen.add(digits)
+            found.append(digits)
+
+    return found
 
 
 def extract_html_text(file_path: Path) -> str:
@@ -113,7 +185,7 @@ def load_document(file_path: Path) -> Document | None:
 
     Processes TXT, HTML-based DOC, PDF, and DOCX files using the
     existing extraction functions. Preserves the original filename
-    in the resulting document metadata.
+    and extracted, validated CNPJs in the resulting document metadata.
 
     Args:
         file_path: Path to the document that should be processed.
@@ -157,7 +229,7 @@ def load_document(file_path: Path) -> Document | None:
 
     return Document(
         page_content=content,
-        metadata={"source": file_path.name},
+        metadata={"source": file_path.name, "cnpjs": extract_cnpjs(content)},
     )
 
 
@@ -213,3 +285,4 @@ def split_documents(
     )
 
     return splitter.split_documents(documents)
+
