@@ -16,6 +16,7 @@ from app.rag.document_analyzer import (
 )
 from app.rag.evidence_validator import (
     refine_funeral_analysis,
+    refine_insurance_analysis,
     validate_document_analysis,
 )
 
@@ -263,9 +264,13 @@ def analyze_agreements(
             analysis=analysis,
             documents=source_documents,
         )
-        return refine_funeral_analysis(
+        funeral_refined = refine_funeral_analysis(
             question=question,
             analysis=validated,
+        )
+        return refine_insurance_analysis(
+            question=question,
+            analysis=funeral_refined,
         )
 
     with ThreadPoolExecutor(
@@ -323,6 +328,21 @@ def consolidate_analyses(
     if not question.strip():
         raise ValueError("Question cannot be empty.")
 
+    normalized_question = normalize_selection_text(question)
+    # A restrictive question must not silently include optional or conditional
+    # obligations. Other questions still show all supported classifications.
+    requires_mandatory = bool(
+        re.search(r"\b(?:obrigatori[ao]s?|obrigatoriedade)\b", normalized_question)
+    ) and not bool(
+        re.search(
+            r"\b(?:nao|sem)\s+"
+            r"(?:(?:e|sao|ser|sera|seria|seriam|necessariamente|"
+            r"considerad[oa]s?)\s+){0,3}"
+            r"obrigatori",
+            normalized_question,
+        )
+    )
+
     sources: list[dict[str, Any]] = []
     answer_lines: list[str] = []
     seen_sources: set[str] = set()
@@ -334,6 +354,9 @@ def consolidate_analyses(
         seen_sources.add(analysis.source)
 
         if not analysis.relevant or not analysis.evidence:
+            continue
+
+        if requires_mandatory and analysis.classification != EvidenceClassification.MANDATORY:
             continue
 
         label = CLASSIFICATION_LABELS.get(
