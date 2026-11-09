@@ -308,6 +308,35 @@ def run_rag_pipeline(
         raise ValueError("Question cannot be empty.")
 
     normalized_question = question.strip()
+
+    # An explicitly named file is a strict retrieval scope, not a keyword
+    # to be approximated by semantic similarity across other agreements.
+    named_files = list(dict.fromkeys(re.findall(
+        r"(?<![\w/])([A-Za-z0-9][A-Za-z0-9_.-]*\.(?:docx?|pdf|txt))\b",
+        normalized_question,
+        re.IGNORECASE,
+    )))
+    if named_files and cnpj is None:
+        available_sources = vector_store.list_sources()
+        by_name = {source.casefold(): source for source in available_sources}
+        existing_names = [
+            by_name[name.casefold()]
+            for name in named_files
+            if name.casefold() in by_name
+        ]
+        missing_names = [
+            name for name in named_files
+            if name.casefold() not in by_name
+        ]
+        if missing_names:
+            return {
+                "question": normalized_question,
+                "answer": "Não encontrei os seguintes arquivos indexados: "
+                + ", ".join(missing_names) + ".",
+                "sources": [],
+            }
+        allowed_sources = existing_names
+
     pipeline_started_at = perf_counter()
 
     retrieval_started_at = perf_counter()

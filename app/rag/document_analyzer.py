@@ -1,4 +1,3 @@
-
 from collections import defaultdict
 from enum import Enum
 
@@ -180,6 +179,24 @@ REGRAS DE EVIDÊNCIA:
 18. Quando houver conflito, ambiguidade ou ausência
     de informação essencial, utilize insufficient.
 
+REGRAS DE INTENÇÃO DA PERGUNTA:
+
+18-A. Se o usuário perguntar quais convenções NÃO estabelecem
+      seguro de vida obrigatório, procure evidências explícitas
+      de contratação facultativa, adesão condicionada ou outra
+      alternativa, mantendo a classificação correspondente.
+      Uma cláusula obrigatória não satisfaz essa busca negativa.
+      Não conclua que a obrigação está ausente de todo o documento
+      simplesmente porque o trecho recuperado não a menciona.
+
+18-B. Se o usuário pedir comparação entre obrigatórias,
+      facultativas e condicionais, considere todas as três classes
+      relevantes para a comparação. Não descarte uma cláusula
+      facultativa apenas por a pergunta mencionar "obrigatórias".
+
+18-C. Se o usuário citar nomes de arquivos, analise somente os
+      trechos que correspondem à fonte indicada para cada análise.
+
 REGRAS DE SEGURANÇA:
 
 19. Não invente cláusulas, obrigações, valores,
@@ -336,10 +353,10 @@ def analyze_document(
             "document analysis."
         )
 
+    # Source identity is trusted metadata from retrieval, not model output.
+    # The evidence validator still checks quotations against the original
+    # chunks; correcting this field does not authorize unrelated evidence.
     if result.source != source:
-        raise ValueError(
-            "The analyzed source does not match "
-            "the requested document."
-        )
+        result = result.model_copy(update={"source": source})
 
     return result

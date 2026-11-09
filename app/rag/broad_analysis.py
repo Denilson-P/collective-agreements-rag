@@ -329,18 +329,35 @@ def consolidate_analyses(
         raise ValueError("Question cannot be empty.")
 
     normalized_question = normalize_selection_text(question)
-    # A restrictive question must not silently include optional or conditional
-    # obligations. Other questions still show all supported classifications.
-    requires_mandatory = bool(
-        re.search(r"\b(?:obrigatori[ao]s?|obrigatoriedade)\b", normalized_question)
-    ) and not bool(
+    asks_for_comparison = bool(re.search(
+        r"\b(?:compar(?:e|ar|acao|ando)|separ(?:e|ando)|"
+        r"diferenc(?:ie|as)|classifiqu?e)\b",
+        normalized_question,
+    )) or bool(
+        re.search(r"\bobrigatori", normalized_question)
+        and re.search(r"\bfacultativ", normalized_question)
+        and re.search(r"\bcondicion", normalized_question)
+    )
+    asks_for_nonmandatory = bool(
         re.search(
-            r"\b(?:nao|sem)\s+"
-            r"(?:(?:e|sao|ser|sera|seria|seriam|necessariamente|"
-            r"considerad[oa]s?)\s+){0,3}"
-            r"obrigatori",
+            r"\bnao\s+(?:(?:se|e|sao|seria|seriam|serao|"
+            r"estabelec(?:e|em)|exig(?:e|em)|preve(?:em|m)|"
+            r"considerad[oa]s?)\s+){0,4}obrigatori",
             normalized_question,
         )
+        or re.search(
+            r"\bnao\s+(?:(?:estabelec(?:e|em)|exig(?:e|em)|"
+            r"preve(?:em|m))\s+)(?:(?:um|uma|o|a|de|"
+            r"seguro|vida|contratacao)\s+){0,7}obrigatori",
+            normalized_question,
+        )
+        or re.search(r"\bsem\s+obrigatoriedade\b", normalized_question)
+        or re.search(r"\bnao\s+obrigatori", normalized_question)
+    ) and not asks_for_comparison
+    requires_mandatory = (
+        bool(re.search(r"\b(?:obrigatori[ao]s?|obrigatoriedade)\b", normalized_question))
+        and not asks_for_nonmandatory
+        and not asks_for_comparison
     )
 
     sources: list[dict[str, Any]] = []
@@ -357,6 +374,12 @@ def consolidate_analyses(
             continue
 
         if requires_mandatory and analysis.classification != EvidenceClassification.MANDATORY:
+            continue
+        if asks_for_nonmandatory and analysis.classification not in (
+            EvidenceClassification.OPTIONAL,
+            EvidenceClassification.CONDITIONAL,
+            EvidenceClassification.ALTERNATIVE,
+        ):
             continue
 
         label = CLASSIFICATION_LABELS.get(
@@ -404,11 +427,23 @@ def consolidate_analyses(
             "nos trechos recuperados para identificar "
             "convenções que atendam à consulta."
         )
+        if asks_for_nonmandatory:
+            answer += (
+                " A ausência de obrigação não pode ser comprovada "
+                "apenas pela falta de trechos recuperados."
+            )
     else:
         answer = (
             "Resultado da análise dos trechos recuperados "
             "por convenção:\n\n"
             + "\n\n".join(answer_lines)
+            + (
+                "\n\nObservação: foram selecionadas apenas cláusulas "
+                "com indicação de faculdade, condição ou alternativa. "
+                "Isso não comprova a ausência de outras obrigações "
+                "no texto integral."
+                if asks_for_nonmandatory else ""
+            )
             + "\n\nAs classificações consideram apenas os "
             "trechos recuperados e não comprovam a vigência "
             "atual das convenções."
