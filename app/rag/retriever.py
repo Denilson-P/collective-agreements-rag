@@ -239,6 +239,7 @@ def retrieve_documents(
     vector_store: QdrantVectorStoreAdapter,
     k: int | None = None,
     allowed_sources: list[str] | None = None,
+    cnpj: str | None = None,
 ) -> list[Document]:
     """Retrieve relevant chunks using an adaptive search strategy.
 
@@ -252,11 +253,14 @@ def retrieve_documents(
     Args:
         question: Natural-language question about collective agreements.
         vector_store: Configured Qdrant vector store adapter.
+        cnpj: Optional validated CNPJ for exact metadata filtering.
         allowed_sources: Optional names of documents eligible for retrieval.
             An empty list disables retrieval rather than searching globally.
         k: Optional retrieval limit. For specific questions, overrides
             the default global limit. For broad questions, limits the
             total number of returned chunks when explicitly provided.
+            For a CNPJ search, at least one chunk per matching source is
+            retained even when this exceeds the requested chunk limit.
 
     Returns:
         list[Document]: Relevant, deduplicated document chunks.
@@ -287,6 +291,16 @@ def retrieve_documents(
 
     normalized_question = question.strip()
 
+    if cnpj is not None:
+        cnpj_sources = vector_store.list_sources_by_cnpj(cnpj)
+        if allowed_sources is None:
+            allowed_sources = cnpj_sources
+        else:
+            permitted = set(allowed_sources)
+            allowed_sources = [
+                source for source in cnpj_sources if source in permitted
+            ]
+
     if allowed_sources is not None and not allowed_sources:
         return []
 
@@ -311,6 +325,10 @@ def retrieve_documents(
         if k is not None
         else MAX_BROAD_CHUNKS
     )
+    if cnpj is not None:
+        # A document-level CNPJ match should never disappear merely because
+        # other matching documents supplied more chunks than the usual cap.
+        max_chunks = max(max_chunks, len(sources))
 
     if not sources:
         return []
@@ -334,7 +352,7 @@ def retrieve_documents(
         """
         return vector_store.similarity_search_by_vector(
             embedding=query_embedding,
-            k=CHUNKS_PER_SOURCE,
+            k=6 if cnpj is not None else CHUNKS_PER_SOURCE,
             source=source,
         )
 

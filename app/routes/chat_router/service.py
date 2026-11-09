@@ -6,9 +6,15 @@ from langchain_core.language_models import BaseChatModel
 
 from app.adapters.qdrant_vector_store import QdrantVectorStoreAdapter
 from app.rag.pipeline import run_rag_pipeline
+from app.rag.ingestion import extract_cnpjs
 from app.rag.retriever import get_retriever
 from app.routes.chat_router.conversation_memory import conversation_memory
 from app.routes.chat_router.intent_router import get_direct_answer
+
+
+_CNPJ_CANDIDATE_PATTERN = re.compile(
+    r"(?<![\dA-Za-z])(?:\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{14})(?![\dA-Za-z])"
+)
 
 
 _NAME_QUESTION_PATTERNS = (
@@ -114,52 +120,100 @@ class ChatService:
                 result = {'question': question, 'answer': direct, 'sources': []}
                 documentary = False
             else:
-                effective_question = question
-                allowed_sources = None
-                # Only contextualize overt follow-ups, never unrelated queries.
-                if re.match(r'^\s*(?:e\s+)?(?:quais delas|qual delas|e quanto|e quais|e qual|e sobre|dessas|desses|isso|elas|eles)\b',
-                            normalized):
-                    previous = next(
-                        (turn for turn in reversed(snapshot.turns) if turn[2]),
-                        None,
+                candidate_cnpjs = _CNPJ_CANDIDATE_PATTERN.findall(question)
+                valid_cnpjs = extract_cnpjs(question)
+                if candidate_cnpjs and len(valid_cnpjs) != 1:
+                    answer = (
+                        "O CNPJ informado é inválido. Verifique os 14 dígitos."
+                        if not valid_cnpjs
+                        else "Informe apenas um CNPJ por consulta."
                     )
-                    if previous and previous.sources:
-                        allowed_sources = list(previous.sources)
-                        # When the previous question requested mandatory
-                        # provisions, do not carry facultative sources forward.
-                        if re.search(r'\b(?:obrigat[oó]ri[oa]s?|exig(?:em|e))\b',
-                                     previous.question, re.IGNORECASE):
-                            mandatory = [
-                                source for source in allowed_sources
-                                if re.search(
-                                    rf'\*\*{re.escape(source)}\*\*\s*[—–-]\s*Obrigatório',
-                                    previous.answer,
-                                )
-                            ]
-                            if '—' in previous.answer and 'Obrigatório' in previous.answer:
-                                allowed_sources = mandatory
-                        # The new search must focus on the NEW subject.
-                        # Previous evidence is not injected into its query.
-                        effective_question = question
-                    elif previous:
-                        # Without verified sources, do not infer a source list.
-                        # Preserve the prior behavior for legacy sessions.
-                        effective_question = (
-                            f'Pergunta anterior: {previous.question[:500]}\n'
-                            f'Pergunta de acompanhamento: {question}'
-                        )
-                pipeline_kwargs = {}
-                if allowed_sources is not None:
-                    pipeline_kwargs['allowed_sources'] = allowed_sources
-                result = run_rag_pipeline(
-                    question=effective_question,
-                    vector_store=self.vector_store,
-                    chat_model=self.chat_model,
-                    k=k,
-                    **pipeline_kwargs,
-                )
-                result['question'] = question
-                documentary = True
+                    result = {
+                        'question': question,
+                        'answer': answer,
+                        'sources': [],
+                    }
+                    documentary = False
+                else:
+                    result = self._answer_documentary_question(
+                        question=question,
+                        normalized=normalized,
+                        snapshot=snapshot,
+                        k=k,
+                        cnpj=valid_cnpjs[0] if valid_cnpjs else None,
+                    )
+                    documentary = True
 
         conversation_memory.save(session_id, question, result['answer'], documentary, sources=result.get('sources', []))
         return {**result, 'conversation_id': session_id}
+
+    def _answer_documentary_question(
+        self,
+        question: str,
+        normalized: str,
+        snapshot: Any,
+        k: int | None,
+        cnpj: str | None,
+    ) -> dict[str, Any]:
+        """Route documentary questions with CNPJ and follow-up constraints.
+
+        Args:
+            question: Original user's question.
+            normalized: Accent-free normalized question.
+            snapshot: Conversation state captured for this session.
+            k: Optional retrieval limit.
+            cnpj: Validated CNPJ, or None for ordinary retrieval.
+
+        Returns:
+            dict[str, Any]: RAG answer with the original user question.
+
+        Raises:
+            Exception: If retrieval or answer generation fails.
+        """
+        effective_question = question
+        allowed_sources = None
+        # An explicit CNPJ is a new scope, never an inherited follow-up.
+        if cnpj is None and re.match(
+            r'^\s*(?:e\s+)?(?:quais delas|qual delas|e quanto|e quais|e qual|e sobre|dessas|desses|isso|elas|eles)\b',
+            normalized,
+        ):
+            previous = next(
+                (turn for turn in reversed(snapshot.turns) if turn[2]),
+                None,
+            )
+            if previous and previous.sources:
+                allowed_sources = list(previous.sources)
+                if re.search(
+                    r'\b(?:obrigat[oó]ri[oa]s?|exig(?:em|e))\b',
+                    previous.question,
+                    re.IGNORECASE,
+                ):
+                    mandatory = [
+                        source for source in allowed_sources
+                        if re.search(
+                            rf'\*\*{re.escape(source)}\*\*\s*[—–-]\s*Obrigatório',
+                            previous.answer,
+                        )
+                    ]
+                    if '—' in previous.answer and 'Obrigatório' in previous.answer:
+                        allowed_sources = mandatory
+            elif previous:
+                effective_question = (
+                    f'Pergunta anterior: {previous.question[:500]}\n'
+                    f'Pergunta de acompanhamento: {question}'
+                )
+
+        pipeline_kwargs: dict[str, Any] = {}
+        if allowed_sources is not None:
+            pipeline_kwargs['allowed_sources'] = allowed_sources
+        if cnpj is not None:
+            pipeline_kwargs['cnpj'] = cnpj
+        result = run_rag_pipeline(
+            question=effective_question,
+            vector_store=self.vector_store,
+            chat_model=self.chat_model,
+            k=k,
+            **pipeline_kwargs,
+        )
+        result['question'] = question
+        return result
