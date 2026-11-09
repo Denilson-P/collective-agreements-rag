@@ -80,6 +80,15 @@ REGRAS DE IDENTIFICAÇÃO:
 4. Não transforme uma obrigação de auxílio-funeral em obrigação
    de contratação de seguro de vida.
 
+4-A. Ao analisar auxílio-funeral, identifique expressamente o evento
+     coberto e a pessoa falecida: empregado, cônjuge, filho ou outro
+     dependente. Reembolso de funeral de filhos menores não comprova,
+     isoladamente, auxílio-funeral por morte do trabalhador.
+
+4-B. Quando a pergunta solicitar convenções que também ofereçam
+     auxílio-funeral, não considere relevante uma cláusula que
+     somente prevê indenização ou reembolso de funeral de filhos.
+
 REGRAS DE CLASSIFICAÇÃO:
 
 5. MANDATORY:
@@ -104,7 +113,9 @@ REGRAS DE CLASSIFICAÇÃO:
    - "A critério da empresa."
 
    Diferencie a contratação facultativa pela empresa
-   da adesão facultativa pelo empregado.
+   da adesão facultativa pelo empregado. Não classifique
+   como OPTIONAL uma obrigação que permanece obrigatória
+   para a empresa apenas porque a adesão individual é voluntária.
 
 7. CONDITIONAL:
    Utilize quando a obrigação especificamente consultada
@@ -114,6 +125,8 @@ REGRAS DE CLASSIFICAÇÃO:
 
    Não classifique como condicional apenas porque existem
    condições de custeio, desconto ou pagamento.
+   Diferencie condições de exigibilidade e hipóteses de dispensa
+   de condições que apenas especificam a execução da obrigação.
 
 8. ALTERNATIVE:
    Utilize quando a obrigação consultada puder ser cumprida

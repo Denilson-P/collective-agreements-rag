@@ -14,7 +14,10 @@ from app.rag.document_analyzer import (
     analyze_document,
     group_documents_by_source,
 )
-from app.rag.evidence_validator import validate_document_analysis
+from app.rag.evidence_validator import (
+    refine_funeral_analysis,
+    validate_document_analysis,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -256,9 +259,13 @@ def analyze_agreements(
             chat_model=chat_model,
         )
 
-        return validate_document_analysis(
+        validated = validate_document_analysis(
             analysis=analysis,
             documents=source_documents,
+        )
+        return refine_funeral_analysis(
+            question=question,
+            analysis=validated,
         )
 
     with ThreadPoolExecutor(
