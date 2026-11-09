@@ -259,3 +259,85 @@ def _is_exclusively_dependent_funeral(excerpt: str) -> bool:
         text,
     )
     return bool(contains_funeral and child_specific and not employee_funeral)
+
+
+def refine_insurance_analysis(
+    question: str,
+    analysis: DocumentAnalysis,
+) -> DocumentAnalysis:
+    """Reject funeral-substitution excerpts as standalone life-insurance proof.
+
+    Args:
+        question: User's question, used to determine whether life insurance
+            is the benefit being investigated.
+        analysis: Analysis whose quotations were already source-validated.
+
+    Returns:
+        DocumentAnalysis: Copy without funeral-only substitution quotations.
+            If those are the only supporting evidence, the finding becomes
+            insufficient. An explicit employee-adhesion prerequisite also
+            takes precedence over an optional label when the same evidence
+            states that the employer must maintain insurance.
+
+    Notes:
+        This guard is intentionally narrow. It does not infer obligations
+        from merely mentioning an insurance policy or override unrelated
+        benefit questions.
+    """
+    normalized_question = _normalize_scope_text(question)
+    if not re.search(r"\bseguro\s+de\s+vida\b", normalized_question):
+        return analysis
+
+    def is_substitution_only(excerpt: str) -> bool:
+        text = _normalize_scope_text(excerpt)
+        is_funeral_substitution = (
+            re.search(r"\b(?:auxilio\s+funeral|auxilio\s+funerario)\b", text)
+            and re.search(r"\b(?:isent[ao]s?|dispensad[ao]s?)\b", text)
+            and re.search(r"\bseguro\s+de\s+vida\b", text)
+        )
+        direct_insurance_obligation = re.search(
+            r"\b(?:contratarao?|manterao?|farao|deverao\s+contratar)\b"
+            r".{0,100}\bseguro\s+de\s+vida\b", text
+        )
+        return bool(is_funeral_substitution and not direct_insurance_obligation)
+
+    kept = [
+        evidence for evidence in analysis.evidence
+        if not is_substitution_only(evidence.excerpt)
+    ]
+    if len(kept) != len(analysis.evidence):
+        if not kept:
+            return analysis.model_copy(update={
+                "classification": EvidenceClassification.INSUFFICIENT,
+                "relevant": False,
+                "justification": (
+                    "A evidência apenas admite seguro de vida como alternativa "
+                    "ao auxílio-funeral; não comprova obrigação de contratar "
+                    "o seguro de vida."
+                ),
+                "evidence": [],
+            })
+        analysis = analysis.model_copy(update={"evidence": kept})
+
+    # An employer's obligation may be conditional on the employee opting in.
+    # This is not the same as the employer freely choosing to offer insurance.
+    if analysis.classification == EvidenceClassification.OPTIONAL:
+        text = " ".join(_normalize_scope_text(e.excerpt) for e in analysis.evidence)
+        employer_must_maintain = re.search(
+            r"\b(?:empresas?|empregador(?:es)?)\s+manterao?\s+"
+            r"seguro\s+de\s+vida\b", text
+        )
+        employee_adhesion = (
+            "dependera da adesao do empregado" in text
+            or "dependera de adesao do empregado" in text
+        )
+        if employer_must_maintain and employee_adhesion:
+            return analysis.model_copy(update={
+                "classification": EvidenceClassification.CONDITIONAL,
+                "justification": (
+                    "A empresa deve manter o seguro, mas a aplicação "
+                    "da cláusula depende da adesão do empregado."
+                ),
+            })
+
+    return analysis
