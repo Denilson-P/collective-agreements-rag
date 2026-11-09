@@ -273,6 +273,7 @@ def run_rag_pipeline(
     chat_model: BaseChatModel | None = None,
     k: int | None = None,
     allowed_sources: list[str] | None = None,
+    cnpj: str | None = None,
 ) -> dict[str, Any]:
     """Execute adaptive retrieval and evidence-grounded analysis.
 
@@ -282,6 +283,7 @@ def run_rag_pipeline(
         chat_model: Optional injected language model.
         k: Optional retrieval limit passed to the retriever.
         allowed_sources: Optional source whitelist for contextual follow-ups.
+        cnpj: Optional normalized CNPJ for exact metadata filtering.
 
     Returns:
         dict[str, Any]: Result containing the normalized question,
@@ -315,6 +317,7 @@ def run_rag_pipeline(
         vector_store=vector_store,
         k=k,
         **({"allowed_sources": allowed_sources} if allowed_sources is not None else {}),
+        **({"cnpj": cnpj} if cnpj is not None else {}),
     )
 
     retrieval_duration = (
@@ -329,7 +332,32 @@ def run_rag_pipeline(
 
     generation_started_at = perf_counter()
 
-    if (allowed_sources is not None or is_broad_question(normalized_question)) and documents:
+    if cnpj is not None and not documents:
+        return {
+            "question": normalized_question,
+            "answer": (
+                "Não encontrei documentos indexados que contenham o "
+                f"CNPJ {cnpj}."
+            ),
+            "sources": [],
+        }
+
+    generic_cnpj_request = bool(
+        cnpj is not None
+        and re.search(
+            r"\b(?:traga|mostre|apresente|informa(?:coes|ções)|resum[ao]|fale)\b",
+            normalized_question,
+            re.IGNORECASE,
+        )
+        and not re.search(
+            r"\b(?:seguro|aux[ií]lio|f[eé]rias|benef[ií]cio|cl[aá]usula|"
+            r"sal[aá]rio|jornada|obrigat[oó]ri|condi[cç][aã]o)\b",
+            normalized_question,
+            re.IGNORECASE,
+        )
+    )
+
+    if (allowed_sources is not None or is_broad_question(normalized_question)) and documents and not generic_cnpj_request:
         model = (
             chat_model
             if chat_model is not None
@@ -362,8 +390,26 @@ def run_rag_pipeline(
         processing_mode = "broad"
 
     else:
+        generation_question = normalized_question
+        if cnpj is not None:
+            matched_sources = list(dict.fromkeys(
+                document.metadata.get("source")
+                for document in documents
+                if isinstance(document.metadata.get("source"), str)
+                and document.metadata.get("source").strip()
+            ))
+            generation_question += (
+                "\n\nOrientação de escopo: o filtro exato de CNPJ "
+                f"encontrou {len(matched_sources)} documento(s): "
+                + ", ".join(matched_sources)
+                + ". Apresente as informações por documento quando "
+                "pertinente. Não afirme que existe apenas um documento "
+                "quando há múltiplos resultados. Fundamente as "
+                "conclusões exclusivamente nos trechos fornecidos."
+            )
+
         answer = generate_answer(
-            question=normalized_question,
+            question=generation_question,
             documents=documents,
             chat_model=chat_model,
         )
@@ -372,6 +418,43 @@ def run_rag_pipeline(
             documents=documents,
             answer=answer,
         )
+
+        if cnpj is not None:
+            # The LLM can summarize a subset of the retrieved documents.
+            # Always expose the complete set of CNPJ-matching sources found
+            # by the retriever independently of what the model mentions.
+            first_reference_by_source: dict[str, int] = {}
+            for reference, document in enumerate(documents, start=1):
+                source = document.metadata.get("source")
+                if isinstance(source, str) and source.strip():
+                    first_reference_by_source.setdefault(source, reference)
+
+            source_index = {
+                item["reference"]: item for item in sources
+            }
+            for reference in first_reference_by_source.values():
+                source_index.setdefault(
+                    reference,
+                    {
+                        "reference": reference,
+                        "source": documents[reference - 1].metadata["source"],
+                        "excerpt": documents[reference - 1].page_content,
+                    },
+                )
+            sources = [source_index[key] for key in sorted(source_index)]
+
+            label = "documento" if len(first_reference_by_source) == 1 else "documentos"
+            inventory = "\n".join(
+                f"- **{source}** [{reference}]"
+                for source, reference in first_reference_by_source.items()
+            )
+            answer = (
+                f"Foram encontrados {len(first_reference_by_source)} {label} "
+                f"que contêm o CNPJ {cnpj} nos metadados:\n"
+                f"{inventory}\n\n"
+                "Informações dos trechos recuperados:\n\n"
+                f"{answer}"
+            )
 
         processing_mode = "specific"
 

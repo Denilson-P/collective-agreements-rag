@@ -280,6 +280,64 @@ class QdrantVectorStoreAdapter:
 
         return sorted(sources)
 
+    def list_sources_by_cnpj(self, cnpj: str) -> list[str]:
+        """Find document filenames using an exact CNPJ payload filter.
+
+        Args:
+            cnpj: Validated numeric CNPJ containing exactly 14 digits.
+
+        Returns:
+            list[str]: Distinct filenames whose indexed metadata contains
+                the CNPJ, sorted alphabetically.
+
+        Raises:
+            ValueError: If the supplied CNPJ is not 14 numeric digits.
+            Exception: If Qdrant cannot perform the filtered scroll.
+
+        Notes:
+            A match indicates that a document contains the CNPJ; it does
+            not establish that the entity is a signatory.
+        """
+        if not isinstance(cnpj, str) or not re.fullmatch(r"[0-9]{14}", cnpj):
+            raise ValueError("CNPJ must contain exactly 14 numeric digits.")
+
+        if not self.client.collection_exists(self.collection_name):
+            return []
+
+        source_names: set[str] = set()
+        offset = None
+        scroll_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="metadata.cnpjs",
+                    match=models.MatchValue(value=cnpj),
+                )
+            ]
+        )
+
+        while True:
+            points, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=scroll_filter,
+                limit=256,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+
+            for point in points:
+                metadata = (point.payload or {}).get("metadata")
+                if not isinstance(metadata, dict):
+                    continue
+                source = metadata.get("source")
+                if isinstance(source, str) and source.strip():
+                    source_names.add(source.strip())
+
+            if offset is None:
+                break
+
+        return sorted(source_names)
+
     def embed_query(self, query: str) -> list[float]:
         """Generate a reusable embedding for a search query.
 
