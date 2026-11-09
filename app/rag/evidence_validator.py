@@ -166,3 +166,96 @@ def validate_document_analysis(
     return analysis.model_copy(
         update={"evidence": verified_evidence}
     )
+
+
+def refine_funeral_analysis(
+    question: str,
+    analysis: DocumentAnalysis,
+) -> DocumentAnalysis:
+    """Exclude dependent-only funeral reimbursements from employee-benefit answers.
+
+    Args:
+        question: User question defining whose funeral coverage is sought.
+        analysis: Independently validated analysis with literal citations.
+
+    Returns:
+        DocumentAnalysis: Copy without excerpts describing exclusively the
+        funeral of children or minor dependents, when the user asks for the
+        employee's funeral benefit. If none remain, mark the analysis as
+        insufficient and irrelevant. All other questions remain unchanged.
+
+    Notes:
+        This narrow safeguard does not determine legal applicability,
+        infer insurance obligations, or rewrite model classifications.
+        Ambiguous quotations remain subject to review by the model.
+    """
+    normalized_question = _normalize_scope_text(question)
+    asks_about_funeral = re.search(
+        r"\b(?:funeral|funerari[ao]s?)\b", normalized_question
+    ) is not None
+    asks_about_dependents = re.search(
+        r"\b(?:filh[oa]s?|dependentes?|menores?|criancas?)\b",
+        normalized_question,
+    ) is not None
+
+    if not asks_about_funeral or asks_about_dependents or not analysis.evidence:
+        return analysis
+
+    kept_evidence = [
+        evidence for evidence in analysis.evidence
+        if not _is_exclusively_dependent_funeral(evidence.excerpt)
+    ]
+    if len(kept_evidence) == len(analysis.evidence):
+        return analysis
+
+    if kept_evidence:
+        return analysis.model_copy(update={"evidence": kept_evidence})
+
+    return analysis.model_copy(
+        update={
+            "classification": EvidenceClassification.INSUFFICIENT,
+            "relevant": False,
+            "justification": (
+                "O trecho apresentado trata apenas de despesas funerárias "
+                "de dependentes, sem comprovar auxílio-funeral do trabalhador."
+            ),
+            "evidence": [],
+        }
+    )
+
+
+def _normalize_scope_text(text: str) -> str:
+    """Return an accent-insensitive representation for narrowly scoped checks.
+
+    Args:
+        text: Original question or documentary quotation.
+
+    Returns:
+        str: Lowercase text without accents, preserving word boundaries.
+    """
+    value = unicodedata.normalize("NFKD", text.casefold())
+    return "".join(char for char in value if not unicodedata.combining(char))
+
+
+def _is_exclusively_dependent_funeral(excerpt: str) -> bool:
+    """Detect excerpts explicitly limiting funeral reimbursement to children.
+
+    Args:
+        excerpt: Verbatim, previously verified documentary quotation.
+
+    Returns:
+        bool: True only when the quotation concerns children or minors and
+        lacks an explicit employee-funeral provision.
+    """
+    text = _normalize_scope_text(excerpt)
+    contains_funeral = re.search(r"\b(?:funeral|funerari[ao]s?)\b", text)
+    child_specific = (
+        re.search(r"\bfilh[oa]s?\b", text)
+        or re.search(r"\bmenores?\s+de\s+\d+\s+anos\b", text)
+    )
+    employee_funeral = re.search(
+        r"\b(?:falecimento|morte|obito)\s+"
+        r"(?:d[oa]\s+)?(?:empregad[oa]|trabalhador(?:a)?)\b",
+        text,
+    )
+    return bool(contains_funeral and child_specific and not employee_funeral)
