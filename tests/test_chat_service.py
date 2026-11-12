@@ -88,8 +88,8 @@ def test_chat_service_reuses_qdrant_vector_store() -> None:
     ):
         service = ChatService()
 
-        service.ask("Primeira pergunta")
-        service.ask("Segunda pergunta")
+        service.ask("Quais convenções têm seguro de vida?")
+        service.ask("Quais benefícios estão previstos nas convenções?")
 
     mocked_retriever.assert_called_once_with()
     assert service.vector_store is vector_store

@@ -9,7 +9,10 @@ from app.rag.pipeline import run_rag_pipeline
 from app.rag.ingestion import extract_cnpjs
 from app.rag.retriever import get_retriever
 from app.routes.chat_router.conversation_memory import conversation_memory
-from app.routes.chat_router.intent_router import get_direct_answer, get_history_intent
+from app.routes.chat_router.intent_router import (
+    get_direct_answer, get_history_intent, is_documentary_request,
+    get_scope_clarification,
+)
 
 
 _CNPJ_CANDIDATE_PATTERN = re.compile(
@@ -169,7 +172,10 @@ class ChatService:
                         'sources': [],
                     }
                     documentary = False
-                else:
+                elif is_documentary_request(
+                    question,
+                    has_documentary_context=any(turn.documentary for turn in snapshot.turns),
+                ):
                     result = self._answer_documentary_question(
                         question=question,
                         normalized=normalized,
@@ -178,6 +184,13 @@ class ChatService:
                         cnpj=valid_cnpjs[0] if valid_cnpjs else None,
                     )
                     documentary = True
+                else:
+                    result = {
+                        'question': question,
+                        'answer': get_scope_clarification(),
+                        'sources': [],
+                    }
+                    documentary = False
 
         conversation_memory.save(session_id, question, result['answer'], documentary, sources=result.get('sources', []))
         return {**result, 'conversation_id': session_id}

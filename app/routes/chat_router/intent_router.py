@@ -140,3 +140,69 @@ def get_history_intent(message: str) -> str | None:
         if any(pattern.fullmatch(normalized) for pattern in patterns):
             return intent
     return None
+
+
+# Documentary retrieval requires an identifiable subject. Unmatched messages
+# are not permission to search the vector database.
+_DOCUMENTARY_TERMS = frozenset({
+    "acordo", "acordos", "abrangencia", "assistencia", "beneficio", "beneficios",
+    "categoria", "categorias", "clausula", "clausulas", "cnpj", "cnpjs",
+    "convencao", "convencoes", "cct", "ccts", "documento", "documentos",
+    "empregador", "empregadores", "empregado", "empregados", "empresa", "empresas",
+    "ferias", "hospital", "hospitais", "indenizacao", "obrigacao", "obrigacoes",
+    "obrigatorio", "obrigatoria", "obrigatorios", "obrigatorias", "facultativo",
+    "facultativa", "condicional", "previdencia", "sindicato", "sindicatos",
+    "seguro", "seguros", "saude", "odontologico", "trabalhador", "trabalhadores",
+    "terceirizados", "auxilio", "funeral", "varejista", "varejo", "vigencia",
+    "salarial", "salario", "salarios", "cobertura", "coberturas", "piso",
+    "setor", "segmento", "segmentos", "filantropicos", "nutricionistas",
+})
+
+# Follow-ups are accepted only when a documentary turn exists in the session.
+_DOCUMENTARY_FOLLOWUP = re.compile(
+    r"^(?:e\s+)?(?:quais delas|qual delas|e quanto|quanto|e quais|quais|"
+    r"e qual|qual delas|e sobre|sobre isso|dessas|desses|isso|elas|eles|"
+    r"e a outra|e os outros|compare esses|compare essas)\b"
+)
+
+_SCOPE_CLARIFICATION = (
+    "Posso ajudar a consultar convenções coletivas de trabalho. "
+    "Sua mensagem não indica uma consulta a esses documentos. "
+    "Se quiser pesquisar a base, informe a cláusula, o benefício, "
+    "a categoria ou o documento de interesse."
+)
+
+
+def is_documentary_request(message: str, *, has_documentary_context: bool = False) -> bool:
+    """Determine whether a message authorizes documentary retrieval.
+
+    Args:
+        message: Raw user message.
+        has_documentary_context: Whether this session contains a prior
+            successful documentary turn, for elliptical follow-up requests.
+
+    Returns:
+        bool: True only for a documentary subject, recognizable CNPJ or
+        documentary follow-up with relevant session context.
+
+    Notes:
+        This intentionally conservative lexical gate does not interpret
+        every paraphrase. Unknown requests receive clarification instead
+        of a potentially irrelevant Qdrant search.
+    """
+    normalized = _normalize_intent_text(message)
+    words = set(normalized.split())
+    if words & _DOCUMENTARY_TERMS:
+        return True
+    if re.search(r"(?<![\dA-Za-z])(?:\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{14})(?![\dA-Za-z])", message):
+        return True
+    return bool(has_documentary_context and _DOCUMENTARY_FOLLOWUP.match(normalized))
+
+
+def get_scope_clarification() -> str:
+    """Return an honest scope response without retrieving document chunks.
+
+    Returns:
+        str: Scope explanation inviting an explicit documentary request.
+    """
+    return _SCOPE_CLARIFICATION
