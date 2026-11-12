@@ -9,7 +9,10 @@ from app.rag.pipeline import run_rag_pipeline
 from app.rag.ingestion import extract_cnpjs
 from app.rag.retriever import get_retriever
 from app.routes.chat_router.conversation_memory import conversation_memory
-from app.routes.chat_router.intent_router import get_direct_answer, get_history_intent
+from app.routes.chat_router.intent_router import (
+    get_direct_answer, get_history_intent, is_documentary_request,
+    get_scope_clarification,
+)
 
 
 _CNPJ_CANDIDATE_PATTERN = re.compile(
@@ -38,6 +41,34 @@ def _is_name_question(normalized_question: str) -> bool:
         pattern.fullmatch(normalized_question)
         for pattern in _NAME_QUESTION_PATTERNS
     )
+
+
+def _get_memory_requests(normalized_question: str) -> tuple[str, ...] | None:
+    """Recognize a complete single or compound request about chat memory.
+
+    Args:
+        normalized_question: Lowercase, accent-free and punctuation-free input.
+
+    Returns:
+        tuple[str, ...] | None: The recognized memory requests in their original
+        order. Returns None when any clause requires regular document routing.
+
+    Notes:
+        Splitting is conservative: every clause must independently match a
+        supported history or name question. This prevents mixed documentary
+        questions from bypassing the RAG pipeline.
+    """
+    clauses = re.split(r"\s+e\s+(?=(?:qual|o que|como|voce|eu)\b)", normalized_question)
+    requests: list[str] = []
+    for clause in clauses:
+        history_intent = get_history_intent(clause)
+        if history_intent is not None:
+            requests.append(history_intent)
+        elif _is_name_question(clause):
+            requests.append("name")
+        else:
+            return None
+    return tuple(requests) if requests else None
 
 
 class ChatService:
@@ -86,18 +117,19 @@ class ChatService:
         )
         normalized = ' '.join(re.sub(r'[^\w\s]', ' ', normalized).split())
 
-        history_intent = get_history_intent(question)
+        memory_requests = _get_memory_requests(normalized)
 
-        if history_intent is not None:
-            answer = self._answer_history_question(history_intent, snapshot)
-            result = {"question": question, "answer": answer, "sources": []}
-            documentary = False
-        elif _is_name_question(normalized):
-            answer = (
-                f'Seu nome é {snapshot.name}.' if snapshot.name
-                else 'Você ainda não informou seu nome nesta conversa.'
-            )
-            result = {'question': question, 'answer': answer, 'sources': []}
+        if memory_requests is not None:
+            answers = []
+            for request in memory_requests:
+                if request == 'name':
+                    answers.append(
+                        f'Seu nome é {snapshot.name}.' if snapshot.name
+                        else 'Você ainda não informou seu nome nesta conversa.'
+                    )
+                else:
+                    answers.append(self._answer_history_question(request, snapshot))
+            result = {'question': question, 'answer': ' '.join(answers), 'sources': []}
             documentary = False
         else:
             direct = get_direct_answer(question)
@@ -140,7 +172,10 @@ class ChatService:
                         'sources': [],
                     }
                     documentary = False
-                else:
+                elif is_documentary_request(
+                    question,
+                    has_documentary_context=any(turn.documentary for turn in snapshot.turns),
+                ):
                     result = self._answer_documentary_question(
                         question=question,
                         normalized=normalized,
@@ -149,6 +184,13 @@ class ChatService:
                         cnpj=valid_cnpjs[0] if valid_cnpjs else None,
                     )
                     documentary = True
+                else:
+                    result = {
+                        'question': question,
+                        'answer': get_scope_clarification(),
+                        'sources': [],
+                    }
+                    documentary = False
 
         conversation_memory.save(session_id, question, result['answer'], documentary, sources=result.get('sources', []))
         return {**result, 'conversation_id': session_id}

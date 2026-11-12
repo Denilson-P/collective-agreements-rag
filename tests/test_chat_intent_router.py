@@ -45,15 +45,14 @@ def test_direct_conversation_does_not_call_pipeline(message: str) -> None:
         "Bom dia! Quais são as obrigações do seguro de vida?",
         "Obrigado, mas quais convenções exigem seguro de vida?",
         "Qual convenção estabelece auxílio-funeral?",
-        "E quais delas também oferecem auxílio-funeral?",
         "O que diz o documento sobre férias?",
         "Quais são as obrigações da empresa?",
         "Você pode comparar os benefícios?",
         "Você sabe se há auxílio-alimentação?",
     ],
 )
-def test_document_or_ambiguous_question_keeps_rag(message: str) -> None:
-    """Preserve the existing pipeline for document and ambiguous queries.
+def test_documentary_question_keeps_rag(message: str) -> None:
+    """Preserve the existing pipeline for documentary requests.
 
     Args:
         message: User input that must not bypass the RAG pipeline.
